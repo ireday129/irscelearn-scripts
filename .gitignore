@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+
+# Node / tooling
+node_modules/
+.env
+
+# clasp local auth tokens (usually in $HOME, but just in case)
+.clasprc.json
+.credentials/
