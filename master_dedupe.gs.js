@@ -1,0 +1,858 @@
+/** CONFIG / CONSTANTS (Placeholder for external configuration CFG object) **/
+// NOTE: This file assumes an external 'config.js.gs' file defines the CFG object
+// which includes sheet names and column headers. The logic below relies on the
+// mapping provided in the user's latest 'config.js.gs'.
+
+// ===========================================================================
+// UTILITIES (Necessary helper functions for the rest of the script)
+// ===========================================================================
+
+function toast_(msg, isErr){ SpreadsheetApp.getActive().toast(msg, isErr?'Error':'IRS CE Tools', 5); }
+
+function mustGet_(ss, name){
+  const sh = ss.getSheetByName(name);
+  if (!sh) throw new Error(`Sheet "${name}" not found.`);
+  return sh;
+}
+
+function normalizeHeaderRow_(arr){ return arr.map(v=>String(v||'').replace(/\uFEFF/g,'').trim().replace(/\s+/g,' ')); }
+
+function mapHeaders_(hdr){
+  const lower = hdr.map(h=>h.toLowerCase());
+  const find = (label)=> lower.indexOf(String(label||'').toLowerCase().trim().replace(/\s+/g,' '));
+  return {
+    firstName: find(CFG.COL_HEADERS.firstName),
+    lastName:  find(CFG.COL_HEADERS.lastName),
+    ptin:      find(CFG.COL_HEADERS.ptin),
+    email:     find(CFG.COL_HEADERS.email),
+    program:   find(CFG.COL_HEADERS.program),
+    hours:     find(CFG.COL_HEADERS.hours),
+    completion:find(CFG.COL_HEADERS.completion),
+    group:     find(CFG.COL_HEADERS.group), // Now correctly maps to 'Group'
+    masterIssueCol: find(CFG.COL_HEADERS.masterIssueCol),
+    reportedCol:    find(CFG.COL_HEADERS.reportedCol),
+    updatedCol:     find(CFG.COL_HEADERS.updatedCol),
+    reportedAtCol:  find(CFG.COL_HEADERS.reportedAtCol)
+  };
+}
+
+function parseBool_(val){
+  if (typeof val==='boolean') return val;
+  if (val==null) return false;
+  const s = String(val).trim().toLowerCase();
+  return s==='true'||s==='yes'||s==='y'||s==='1';
+}
+
+function formatPtinP0_(ptinRaw) {
+  let v = String(ptinRaw || '').trim().toUpperCase();
+  if (!v) return '';
+  // strip non-digits after the leading P if user pasted oddly
+  v = v.replace(/^P0?(\d{0,7}).*$/, (_, d) => 'P0' + (d || '').padStart(7,'0')).replace(/[^P0\d]/g,'');
+  if (!/^P0\d{7}$/.test(v)) {
+    // fallback: try to build P0 + last 7 digits we can find
+    const digits = (String(ptinRaw).match(/\d+/g) || []).join('');
+    if (digits) v = 'P0' + digits.slice(-7).padStart(7,'0');
+  }
+  return v;
+}
+
+function normalizeProgram_(v) {
+  return String(v || '').toUpperCase().replace(/\s+/g, '').trim();
+}
+
+/** Utility: Merge two rows, filling blank cells in 'kept' with non-blank values from 'incoming'. */
+function mergeRowsFillBlanks_(kept, incoming) {
+  const out = kept.slice();
+  const n = Math.max(kept.length, incoming.length);
+  for (let c = 0; c < n; c++) {
+    const a = out[c];
+    const b = incoming[c];
+    if (isBlankCell_(a) && hasValue_(b)) {
+      out[c] = b;
+    }
+  }
+  return out;
+}
+function isBlankCell_(v) {
+  if (v === null || v === undefined) return true;
+  if (v instanceof Date) return false;
+  if (typeof v === 'string') return v.trim() === '';
+  return false;
+}
+function hasValue_(v) { return !isBlankCell_(v); }
+
+// ===========================================================================
+// MASTER DEDUPLICATION (From earlier conversation, essential for data integrity)
+// ===========================================================================
+
+/**
+ * Deduplicate MASTER by Program Number + Email (older row wins, blanks filled).
+ * Key = normalizeProgram_(Program Number) + '|' + lowercased Email
+ */
+function dedupeMasterByEmailProgram(quiet) {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(CFG.SHEET_MASTER);
+  if (!sh) { if (!quiet) toast_(`Sheet "${CFG.SHEET_MASTER}" not found.`, true); return; }
+
+  const vals = sh.getDataRange().getValues();
+  if (vals.length <= 1) return;
+
+  const headersNorm = normalizeHeaderRow_(vals[0]);
+  const mm = mapHeaders_(headersNorm);
+
+  if (mm.program == null || mm.email == null) {
+    if (!quiet) toast_('Master is missing Program Number and/or Email columns.', true);
+    return;
+  }
+
+  const body = vals.slice(1);
+  if (!body.length) return;
+
+  const hasPTIN = mm.ptin != null;
+
+  const keepMap = new Map();  // key -> keptRow (older)
+  const order   = [];         // stable order of first appearances
+
+  for (let i = 0; i < body.length; i++) {
+    const row = body[i].slice(); // copy
+
+    if (hasPTIN) row[mm.ptin] = formatPtinP0_(row[mm.ptin] || '');
+
+    const email = String(row[mm.email] || '').toLowerCase().trim();
+    const prog  = normalizeProgram_(row[mm.program] || '');
+    
+    // Key is only Program Number + Email (blanks allowed for email)
+    const key = prog + '|' + email;
+
+    if (!prog) continue; // Must have a Program Number
+
+    if (!keepMap.has(key)) {
+      // First/oldest occurrence becomes the canonical row for this key
+      keepMap.set(key, row);
+      order.push(key);
+    } else {
+      // New duplicate: merge into the kept (older) row, but fill only blanks
+      const kept = keepMap.get(key);
+      keepMap.set(key, mergeRowsFillBlanks_(kept, row));
+    }
+  }
+
+  // Rebuild final set: the deduped kept rows in order of first appearance.
+  const deduped = order.map(k => keepMap.get(k));
+
+  // Clear body then write back with exact header width
+  const cols = vals[0].length;
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow()-1, cols).clearContent();
+  if (deduped.length) sh.getRange(2, 1, deduped.length, cols).setValues(deduped);
+
+  if (!quiet) toast_(`Master deduped (older wins; blanks filled from newer): ${deduped.length} row(s) remain.`);
+}
+
+/**
+ * Public function to run Master deduplication via the custom menu.
+ * Removes duplicate rows based on (Program Number + Email), keeping the oldest row.
+ */
+function dedupeMasterManual() {
+  dedupeMasterByEmailProgram(false); // Call with quiet=false to show success/failure toast.
+}
+
+
+// ===========================================================================
+// ROSTER HELPERS
+// ===========================================================================
+
+function mapRosterHeaders_(sh){
+  if (!sh || sh.getLastRow() === 0) return null;
+  const hdr = sh.getRange(1,1,1, sh.getLastColumn()).getValues()[0].map(s=>String(s||'').trim());
+  const lower = hdr.map(h => h.toLowerCase());
+
+  function find(names){
+    for (const n of (Array.isArray(names)?names:[names])) {
+      const i = lower.indexOf(String(n).toLowerCase());
+      if (i >= 0) return i;
+    }
+    return -1;
+  }
+
+  // Be flexible about capitalization; include Valid? and Group
+  const first = find(['Attendee First Name','Attendee first name']);
+  const last  = find(['Attendee Last Name','Attendee last name']);
+  const ptin  = find(['Attendee PTIN','attendee ptin','PTIN']);
+  const email = find(['Email','email']);
+  const valid = find(['Valid?','valid?']);
+  const group = find(['Group','group']);
+
+  // Only First Name, Last Name, PTIN, and Email are mandatory for Roster headers. 
+  if ([first,last,ptin,email].some(i=>i<0)) return null; 
+  return {first, last, ptin, email, valid, group, hdr};
+}
+
+function getRosterMap_(ss){
+  const sh = ss.getSheetByName(CFG.SHEET_ROSTER);
+  if (!sh) return null;
+  const map = mapRosterHeaders_(sh);
+  if (!map) return null;
+  const vals = sh.getDataRange().getValues();
+  if (vals.length <= 1) return new Map();
+  const m = new Map();
+  for (let i=1;i<vals.length;i++){
+    const row = vals[i];
+    const ptin = formatPtinP0_(row[map.ptin]||'');
+    const first = String(row[map.first]||'').trim();
+    const last  = String(row[map.last]||'').trim();
+    if (ptin) m.set(ptin, {first, last});
+  }
+  return m;
+}
+
+/**
+ * Helper to map required columns in the Master sheet.
+ */
+function mapMasterHeaders_(sh) {
+  if (!sh || sh.getLastRow() === 0) return null;
+  const hdr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(s => String(s || '').trim().toLowerCase());
+  
+  const map = {
+    firstName: hdr.indexOf('attendee first name') >= 0 ? hdr.indexOf('attendee first name') : hdr.indexOf('first name'),
+    lastName: hdr.indexOf('attendee last name') >= 0 ? hdr.indexOf('attendee last name') : hdr.indexOf('last name'),
+    ptin: hdr.indexOf('attendee ptin') >= 0 ? hdr.indexOf('attendee ptin') : hdr.indexOf('ptin'),
+    email: hdr.indexOf('email'),
+    group: hdr.indexOf('group'), // Master Group column
+  };
+  
+  if (map.firstName < 0 || map.lastName < 0 || map.email < 0) return null;
+  
+  return map;
+}
+
+/**
+ * Helper to map required columns in the Reported Hours sheet.
+ */
+function mapReportedHoursHeaders_(sh) {
+  if (!sh || sh.getLastRow() === 0) return null;
+  const hdr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(s => String(s || '').trim().toLowerCase());
+
+  function find(names) {
+    for (const n of (Array.isArray(names) ? names : [names])) {
+      const i = hdr.indexOf(String(n).toLowerCase().trim());
+      if (i >= 0) return i;
+    }
+    return -1;
+  }
+  
+  const map = {
+    firstName: find(['attendee first name']),
+    lastName: find(['attendee last name']),
+    ptin: find(['ptin', 'attendee ptin']),
+    program: find(['program number']),
+    hours: find(['ce hours']),
+    completion: find(['program completion date']),
+    dateReported: find(['date reported'])
+  };
+  
+  // All columns are mandatory for reporting
+  if (Object.values(map).some(i => i < 0)) return null;
+  
+  return map;
+}
+
+
+// ===========================================================================
+// MAIN FUNCTIONALITY
+// ===========================================================================
+
+/**
+ * Generates the Roster sheet by pulling unique entries from the Master sheet.
+ * Merges Master data into existing Roster data, preserving unique Roster rows.
+ * The final list is sorted by Attendee First Name.
+ */
+function generateRosterFromMaster(quiet) {
+  const ss = SpreadsheetApp.getActive();
+  const masterSh = ss.getSheetByName(CFG.SHEET_MASTER);
+  const rosterSh = ss.getSheetByName(CFG.SHEET_ROSTER);
+  
+  if (!masterSh || !rosterSh) {
+    if (!quiet) toast_(`Sheets "${CFG.SHEET_MASTER}" and/or "${CFG.SHEET_ROSTER}" not found.`, true);
+    return;
+  }
+  
+  const masterMap = mapMasterHeaders_(masterSh);
+  if (!masterMap) {
+    if (!quiet) toast_('Master sheet is missing required columns (First Name, Last Name, Email).', true);
+    return;
+  }
+  
+  const rosterMap = mapRosterHeaders_(rosterSh);
+  if (!rosterMap) {
+     if (!quiet) toast_('Roster headers missing or renamed.', true); 
+     return;
+  }
+
+  // --- 1. Load existing Roster data to preserve manual entries ---
+  const existingRosterVals = rosterSh.getDataRange().getValues().slice(1);
+  const rosterDataMap = new Map(); // key (email/ptin) -> [row data for Roster]
+  
+  // Populate map with existing Roster rows
+  for (let r = 0; r < existingRosterVals.length; r++) {
+    const row = existingRosterVals[r];
+    const email = String(row[rosterMap.email] || '').toLowerCase().trim();
+    const ptin = formatPtinP0_(row[rosterMap.ptin] || ''); 
+    const key = email || ptin;
+    if (key) rosterDataMap.set(key, row.slice()); // Store a copy
+  }
+
+  // --- 2. Iterate Master and merge/update Roster data ---
+  const masterVals = masterSh.getDataRange().getValues();
+  if (masterVals.length > 1) {
+      for (let r = 1; r < masterVals.length; r++) {
+      const row = masterVals[r];
+      
+      // Extract & Format required fields from Master row
+      const email = String(row[masterMap.email] || '').toLowerCase().trim();
+      let ptin = masterMap.ptin >= 0 ? formatPtinP0_(row[masterMap.ptin] || '') : ''; 
+      const first = String(row[masterMap.firstName] || '').trim();
+      const last  = String(row[masterMap.lastName] || '').trim();
+      
+      // PULLING GROUP VALUE FROM MASTER'S GROUP COLUMN
+      const rosterGroupValue = masterMap.group >= 0 ? String(row[masterMap.group] || '').trim() : ''; 
+
+      const key = email || ptin;
+      if (!key) continue;
+
+      // Create a new Roster row array from Master data
+      const masterRosterRow = Array(rosterMap.hdr.length).fill('');
+      masterRosterRow[rosterMap.first] = first;
+      masterRosterRow[rosterMap.last] = last;
+      masterRosterRow[rosterMap.ptin] = ptin; // Formatted PTIN
+      masterRosterRow[rosterMap.email] = email; 
+      masterRosterRow[rosterMap.group] = rosterGroupValue; // Master Group value goes to Roster Group
+
+      // Update or add: latest Master row always overrides the current data for that key
+      rosterDataMap.set(key, masterRosterRow);
+    }
+  }
+  
+  // --- 3. Finalize and Sort ---
+  let newRosterBody = Array.from(rosterDataMap.values());
+  
+  // Sort the final roster alphabetically by Attendee First Name
+  const firstNameIndex = rosterMap.first;
+  newRosterBody.sort((a, b) => {
+    const nameA = String(a[firstNameIndex] || '').toUpperCase();
+    const nameB = String(b[firstNameIndex] || '').toUpperCase();
+    if (nameA < nameB) return -1;
+    if (nameA > nameB) return 1;
+    return 0;
+  });
+
+  // --- 4. Write back merged data ---
+  const numCols = rosterMap.hdr.length;
+  const rowsToClear = rosterSh.getLastRow() > 1 ? rosterSh.getLastRow() - 1 : 0;
+  if (rowsToClear > 0) rosterSh.getRange(2, 1, rowsToClear, numCols).clearContent();
+  
+  if (newRosterBody.length) rosterSh.getRange(2, 1, newRosterBody.length, numCols).setValues(newRosterBody);
+
+  if (!quiet) toast_(`Roster generated from Master: ${newRosterBody.length} unique entr${newRosterBody.length===1?'y':'ies'} (manual rows preserved).`);
+}
+
+/**
+ * Updates the Master sheet with CE reporting data from the Reported Hours sheet.
+ * Matches rows using PTIN + Program Number. Updates CE hours, completion date,
+ * and sets 'Reported?' to TRUE.
+ */
+function updateMasterFromReportedHours(quiet) {
+  const ss = SpreadsheetApp.getActive();
+  const masterSh = ss.getSheetByName(CFG.SHEET_MASTER);
+  const reportedSh = ss.getSheetByName('Reported Hours'); // Use literal name based on request
+
+  if (!masterSh || !reportedSh) {
+    if (!quiet) toast_('Master or Reported Hours sheet not found.', true);
+    return;
+  }
+
+  const reportedMap = mapReportedHoursHeaders_(reportedSh);
+  if (!reportedMap) {
+    if (!quiet) toast_('Reported Hours sheet is missing required columns.', true);
+    return;
+  }
+  
+  const masterVals = masterSh.getDataRange().getValues();
+  if (masterVals.length <= 1) return;
+
+  const mHdr = normalizeHeaderRow_(masterVals[0]);
+  const mMap = mapHeaders_(mHdr); 
+
+  // Ensure Master has required columns for matching and updating
+  if (mMap.ptin == null || mMap.program == null || mMap.hours == null || mMap.completion == null || mMap.reportedCol == null || mMap.reportedAtCol == null) {
+    if (!quiet) toast_('Master sheet is missing required columns (PTIN, Program Number, CE Hours, Completion, Reported?, Date Reported).', true);
+    return;
+  }
+  
+  const reportedVals = reportedSh.getDataRange().getValues();
+  const reportedHoursMap = new Map(); // Key: PTIN|ProgramNumber -> {hours, completion, dateReported}
+
+  // 1. Build map of reported data for fast lookup
+  for (let r = 1; r < reportedVals.length; r++) {
+    const row = reportedVals[r];
+    const ptin = formatPtinP0_(row[reportedMap.ptin] || '');
+    const program = normalizeProgram_(row[reportedMap.program] || '');
+    
+    if (ptin && program) {
+      const key = `${ptin}|${program}`;
+      reportedHoursMap.set(key, {
+        hours: row[reportedMap.hours],
+        completion: row[reportedMap.completion],
+        dateReported: row[reportedMap.dateReported]
+      });
+    }
+  }
+
+  if (reportedHoursMap.size === 0) {
+    if (!quiet) toast_('Reported Hours sheet contains no valid PTIN/Program Number pairs.', false);
+    return;
+  }
+
+  // 2. Iterate Master sheet and apply updates
+  const body = masterVals.slice(1);
+  let changes = 0;
+
+  for (let i = 0; i < body.length; i++) {
+    const row = body[i];
+    const ptin = formatPtinP0_(row[mMap.ptin] || '');
+    const program = normalizeProgram_(row[mMap.program] || '');
+    
+    if (ptin && program) {
+      const key = `${ptin}|${program}`;
+      if (reportedHoursMap.has(key)) {
+        const reportedData = reportedHoursMap.get(key);
+        
+        // Update data fields
+        row[mMap.hours] = reportedData.hours;
+        row[mMap.completion] = reportedData.completion;
+        row[mMap.reportedAtCol] = reportedData.dateReported;
+
+        // Set Reported? column to TRUE
+        row[mMap.reportedCol] = true;
+        changes++;
+      }
+    }
+  }
+
+  // 3. Write back updated Master data
+  if (changes) {
+    masterSh.getRange(2, 1, body.length, masterVals[0].length).setValues(body);
+    if (!quiet) toast_(`Master sheet updated with reported hours: ${changes} row(s) marked as reported.`);
+  } else {
+    if (!quiet) toast_('No Master rows matched reported hours data.', false);
+  }
+}
+
+
+/**
+ * Deduplicate Roster by key (Email primary, PTIN fallback).
+ * Latest row for a key **overrides** earlier rows.
+ * The final output is sorted alphabetically by Attendee First Name.
+ */
+function dedupeRosterByEmail(quiet){
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(CFG.SHEET_ROSTER);
+  if (!sh) { if(!quiet) toast_(`Sheet "${CFG.SHEET_ROSTER}" not found.`, true); return; }
+  const map = mapRosterHeaders_(sh);
+  if (!map) { if(!quiet) toast_('Roster headers missing or renamed.', true); return; }
+
+  const vals = sh.getDataRange().getValues();
+  if (vals.length <= 1) return;
+
+  const headers = map.hdr;
+  const seen = new Map();               // key -> row array (latest wins)
+
+  for (let r=1; r<vals.length; r++){
+    const row = vals[r].slice();        // copy
+    if (map.ptin >= 0) row[map.ptin] = formatPtinP0_(row[map.ptin] || '');
+
+    const email = String(row[map.email]||'').toLowerCase().trim();
+    const ptin  = String(row[map.ptin]||'').trim();
+    const key   = email || ptin;
+    if (!key) continue;
+
+    seen.set(key, row);
+  }
+
+  let deduped = Array.from(seen.values());
+  
+  const firstNameIndex = map.first;
+
+  deduped.sort((a, b) => {
+    const nameA = String(a[firstNameIndex] || '').toUpperCase();
+    const nameB = String(b[firstNameIndex] || '').toUpperCase();
+    
+    if (nameA < nameB) return -1;
+    if (nameA > nameB) return 1;
+    return 0; // names are equal
+  });
+
+  const lastRow = sh.getLastRow();
+  if (lastRow > 1) sh.getRange(2, 1, lastRow-1, headers.length).clearContent();
+  if (deduped.length) sh.getRange(2, 1, deduped.length, headers.length).setValues(deduped);
+
+  if (!quiet) toast_(`Roster deduplicated and sorted by First Name: ${deduped.length} unique entr${deduped.length===1?'y':'ies'}.`);
+}
+
+function setRosterValidAndPtinForEmails_(emailToPtin){
+  if (!emailToPtin || emailToPtin.size === 0) return;
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(CFG.SHEET_ROSTER);
+  if (!sh) return;
+  const map = mapRosterHeaders_(sh);
+  if (!map) return;
+
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return;
+
+  const rng = sh.getRange(2,1,lastRow-1, sh.getLastColumn());
+  const vals = rng.getValues();
+  let updated = 0;
+
+  for (let i=0;i<vals.length;i++){
+    const row = vals[i];
+    const email = String(row[map.email]||'').toLowerCase().trim();
+    if (!email) continue;
+
+    if (emailToPtin.has(email)) {
+      const ptin = formatPtinP0_(emailToPtin.get(email) || '');
+      if (ptin && row[map.ptin] !== ptin) row[map.ptin] = ptin;
+      // Guard: Only update 'Valid?' if the column exists (map.valid >= 0)
+      if (map.valid >= 0 && !parseBool_(row[map.valid])) row[map.valid] = true;
+      updated++;
+    }
+  }
+
+  if (updated) rng.setValues(vals);
+}
+
+function updateRosterValidityFromIssues_() {
+  const ss = SpreadsheetApp.getActive();
+  const roster = ss.getSheetByName(CFG.SHEET_ROSTER);
+  if (!roster) return;
+  const rMap = mapRosterHeaders_(roster);
+  if (!rMap) return;
+
+  // Uses fallback sheet names for issues consistency
+  const issues = ss.getSheetByName(CFG.SHEET_ISSUES) || ss.getSheetByName('Reporting Issue') || ss.getSheetByName('Reporting Issues');
+  const unresolvedPtins = new Set();
+  const unresolvedEmails = new Set();
+  
+  if (issues) {
+    const ivals = issues.getDataRange().getValues();
+    if (ivals.length > 1) {
+      const ih = ivals[0].map(s=>String(s||'').trim());
+      const iP = ih.indexOf('Attendee PTIN');
+      const iE = ih.indexOf('Email');
+      const iFx = ih.indexOf('Fixed?');
+      for (let r=1;r<ivals.length;r++){
+        const row = ivals[r];
+        if (!parseBool_(row[iFx])) {
+          const p = formatPtinP0_(row[iP]||'');
+          const e = String(row[iE]||'').toLowerCase().trim();
+          if (p) unresolvedPtins.add(p);
+          if (e) unresolvedEmails.add(e);
+        }
+      }
+    }
+  }
+
+  const master = ss.getSheetByName(CFG.SHEET_MASTER);
+  if (master) {
+    const mVals = master.getDataRange().getValues();
+    if (mVals.length > 1) {
+      const mh = normalizeHeaderRow_(mVals[0]);
+      const mMap = mapHeaders_(mh);
+      for (let r=1;r<mVals.length;r++){
+        const row = mVals[r];
+        const iss = String(row[mMap.masterIssueCol]||'').trim();
+        if (iss && iss.toLowerCase()!=='fixed') {
+          const p = formatPtinP0_(row[mMap.ptin]||'');
+          const e = String(row[mMap.email]||'').toLowerCase().trim();
+          if (p) unresolvedPtins.add(p);
+          if (e) unresolvedEmails.add(e);
+        }
+      }
+    }
+  }
+
+  if (unresolvedPtins.size===0 && unresolvedEmails.size===0) return;
+  const rng = roster.getRange(2,1, Math.max(roster.getLastRow()-1,0), roster.getLastColumn());
+  if (rng.getNumRows() === 0) return;
+  const vals = rng.getValues();
+  let changed = 0;
+  for (let i=0;i<vals.length;i++){
+    const row = vals[i];
+    const p = formatPtinP0_(row[rMap.ptin]||'');
+    const e = String(row[rMap.email]||'').toLowerCase().trim();
+    const hit = (p && unresolvedPtins.has(p)) || (e && unresolvedEmails.has(e));
+    // Guard: Only set 'Valid?' to false if the column exists
+    if (hit && rMap.valid >= 0 && parseBool_(row[rMap.valid])) { row[rMap.valid] = false; changed++; }
+  }
+  if (changed) rng.setValues(vals);
+}
+
+/**
+ * Clears the "Reporting Issue?" column on the Master sheet for any rows
+ * corresponding to issues marked as "Fixed?" on the Issues sheet.
+ */
+function clearMasterIssuesFromFixedIssues_(quiet) {
+  const ss = SpreadsheetApp.getActive();
+  const masterSh = ss.getSheetByName(CFG.SHEET_MASTER);
+  const issuesSh = ss.getSheetByName(CFG.SHEET_ISSUES) || ss.getSheetByName('Reporting Issue') || ss.getSheetByName('Reporting Issues');
+
+  if (!masterSh || !issuesSh) {
+    if (!quiet) toast_('Master or Issues sheet not found.', true);
+    return;
+  }
+  
+  const issuesVals = issuesSh.getDataRange().getValues();
+  if (issuesVals.length <= 1) return;
+
+  const ih = issuesVals[0].map(s=>String(s||'').trim());
+  const iP = ih.indexOf('Attendee PTIN');
+  const iE = ih.indexOf('Email');
+  const iFx = ih.indexOf('Fixed?');
+
+  if (iP < 0 || iE < 0 || iFx < 0) {
+    if (!quiet) toast_('Issues sheet is missing PTIN, Email, or Fixed? columns.', true);
+    return;
+  }
+  
+  const fixedKeys = new Set(); 
+
+  for (let r = 1; r < issuesVals.length; r++) {
+    const row = issuesVals[r];
+    if (parseBool_(row[iFx])) {
+      const p = formatPtinP0_(row[iP] || '');
+      const e = String(row[iE] || '').toLowerCase().trim();
+      if (e) fixedKeys.add(e);
+      if (p) fixedKeys.add(p);
+    }
+  }
+
+  if (fixedKeys.size === 0) return;
+  
+  const masterVals = masterSh.getDataRange().getValues();
+  if (masterVals.length <= 1) return;
+
+  const mHdr = normalizeHeaderRow_(masterVals[0]); 
+  const mMap = mapHeaders_(mHdr); 
+
+  if (mMap.ptin == null || mMap.email == null || mMap.masterIssueCol == null) {
+    if (!quiet) toast_('Master sheet is missing PTIN, Email, or Reporting Issue? columns.', true);
+    return;
+  }
+  
+  const body = masterVals.slice(1);
+  let changes = 0;
+  
+  for (let i = 0; i < body.length; i++) {
+    const row = body[i];
+    const email = String(row[mMap.email] || '').toLowerCase().trim();
+    const ptin = formatPtinP0_(row[mMap.ptin] || '');
+    
+    const isFixed = (email && fixedKeys.has(email)) || (ptin && fixedKeys.has(ptin));
+    const hasIssue = String(row[mMap.masterIssueCol] || '').trim() !== '';
+
+    if (isFixed && hasIssue) {
+      row[mMap.masterIssueCol] = '';
+      changes++;
+    }
+  }
+  
+  if (changes) {
+    masterSh.getRange(2, 1, body.length, masterVals[0].length).setValues(body);
+    if (!quiet) toast_(`Master issues cleared based on Fixed? status: ${changes} row(s) updated.`);
+  } else {
+     if (!quiet) toast_('No Master issues needed clearing based on Fixed? status.');
+  }
+}
+
+/** Backfill Master PTIN from Roster by Email **/
+function backfillMasterPtinFromRoster_(quiet){
+  const ss = SpreadsheetApp.getActive();
+  const roster = ss.getSheetByName(CFG.SHEET_ROSTER);
+  if (!roster) return;
+  const rMap = mapRosterHeaders_(roster);
+  if (!rMap) return;
+
+  const master = ss.getSheetByName(CFG.SHEET_MASTER);
+  if (!master) return;
+  const mVals = master.getDataRange().getValues();
+  if (mVals.length <= 1) return;
+
+  const mHdr = normalizeHeaderRow_(mVals[0]);
+  const mMap = mapHeaders_(mHdr);
+  if (mMap.ptin==null || mMap.email==null) return;
+
+  const rVals = roster.getDataRange().getValues();
+  const emailToPtin = new Map();
+  for (let i=1;i<rVals.length;i++){
+    const row = rVals[i];
+    const email = String(row[rMap.email]||'').toLowerCase().trim();
+    const ptin  = formatPtinP0_(row[rMap.ptin]||'');
+    if (email && ptin) emailToPtin.set(email, ptin);
+  }
+
+  const body = mVals.slice(1);
+  let changes = 0;
+  for (let i=0;i<body.length;i++){
+    const row = body[i];
+    const email = String(row[mMap.email]||'').toLowerCase().trim();
+    const ptin  = formatPtinP0_(row[mMap.ptin]||'');
+    if (email && !ptin && emailToPtin.has(email)) {
+      row[mMap.ptin] = emailToPtin.get(email);
+      changes++;
+    }
+  }
+  if (changes) master.getRange(2,1,body.length,mVals[0].length).setValues(body);
+}
+
+/** Backfill Master Group from Roster Group by Email/PTIN (Roster Group -> Master Group) **/
+function backfillMasterGroupFromRoster_(quiet){
+  const ss = SpreadsheetApp.getActive();
+  const roster = ss.getSheetByName(CFG.SHEET_ROSTER);
+  if (!roster) return;
+  const rMap = mapRosterHeaders_(roster);
+  // Need Roster Group column (now optional, but required for this function)
+  if (!rMap || rMap.group == null) return; 
+
+  const master = ss.getSheetByName(CFG.SHEET_MASTER);
+  if (!master) return;
+  const mVals = master.getDataRange().getValues();
+  if (mVals.length <= 1) return;
+
+  const mHdr = normalizeHeaderRow_(mVals[0]);
+  let mMap = mapHeaders_(mHdr); // Use 'let' to allow modification
+  
+  // FIX: Robust check for Master's 'Group' column in case CFG mapping is wrong
+  if (mMap.group == null) {
+    const groupIndex = mHdr.map(h => h.toLowerCase()).indexOf('group');
+    if (groupIndex !== -1) {
+      mMap = { ...mMap, group: groupIndex }; // Create new map with correct index
+    }
+  }
+  
+  // Check Master columns: Group, PTIN, Email
+  if (mMap.ptin == null || mMap.email == null || mMap.group == null) {
+     if (!quiet) toast_('Master sheet is missing PTIN, Email, or Group columns. Cannot backfill Group.', true);
+     return;
+  }
+
+  const rVals = roster.getDataRange().getValues();
+  const emailOrPtinToGroup = new Map();
+  
+  // 1. Build map: Email/PTIN -> Roster Group Value (only for non-blank Group values)
+  for (let i=1;i<rVals.length;i++){
+    const row = rVals[i];
+    const email = String(row[rMap.email]||'').toLowerCase().trim();
+    const ptin  = formatPtinP0_(row[rMap.ptin]||'');
+    const group = String(row[rMap.group]||'').trim();
+    
+    if (!group) continue; 
+    
+    const key = email || ptin;
+    if (key) emailOrPtinToGroup.set(key, group);
+  }
+
+  const body = mVals.slice(1);
+  let changes = 0;
+  
+  // 2. Iterate Master and backfill Group if currently blank
+  for (let i=0;i<body.length;i++){
+    const row = body[i];
+    const email = String(row[mMap.email]||'').toLowerCase().trim();
+    const ptin  = formatPtinP0_(row[mMap.ptin]||'');
+    const masterGroupValue  = String(row[mMap.group]||'').trim(); // Check Master's Group column
+    
+    const key = email || ptin;
+    
+    if (key && !masterGroupValue && emailOrPtinToGroup.has(key)) {
+      // Master Group is blank, and we have a Group value from Roster
+      row[mMap.group] = emailOrPtinToGroup.get(key); // Write to Master's Group column
+      changes++;
+    }
+  }
+  
+  // 3. Write back changes
+  if (changes) {
+    master.getRange(2,1,body.length,mVals[0].length).setValues(body);
+    if (!quiet) toast_(`Master Group backfilled from Roster Group: ${changes} row(s) updated.`);
+  }
+}
+
+/**
+ * Combined function to backfill Master sheet data from Roster sheet.
+ * 1. Backfills PTIN on Master from Roster (where Master PTIN is missing).
+ * 2. Backfills Group on Master from Roster Group (where Master Group is missing).
+ */
+function backfillMasterFromRosterCombined(quiet) {
+  try {
+    // 1. Backfill PTIN
+    backfillMasterPtinFromRoster_(quiet);
+    
+    // 2. Backfill Group (formerly Source)
+    backfillMasterGroupFromRoster_(quiet);
+    
+    if (!quiet) toast_('Master sheet backfilling complete (PTIN and Group updated from Roster).');
+  } catch (e) {
+    toast_('Error during Master Backfill: ' + e.message, true);
+  }
+}
+
+/** onEdit: mark Roster Valid? TRUE pushes fixes to Master **/
+function onEdit(e){
+  try {
+    if (!e || !e.range) return;
+    const sh = e.range.getSheet();
+    if (sh.getName() !== CFG.SHEET_ROSTER) return;
+    const map = mapRosterHeaders_(sh);
+    if (!map) return;
+
+    // Guard: Only check for an edit in the 'Valid?' column if it exists (map.valid >= 0)
+    if (map.valid >= 0 && e.range.getRow() >= 2 && e.range.getColumn() === (map.valid + 1)) {
+      const newVal = e.value;
+      if (parseBool_(newVal)) {
+        const r = e.range.getRow();
+        const vals = sh.getRange(r, 1, 1, sh.getLastColumn()).getValues()[0];
+
+        const first = String(vals[map.first]||'').trim();
+        const last  = String(vals[map.last]||'').trim();
+        const ptin  = formatPtinP0_(vals[map.ptin]||'');
+        const email = String(vals[map.email]||'').toLowerCase().trim();
+
+        if (!email) { toast_('Roster row has no Email; cannot sync to Master.', true); return; }
+
+        const master = mustGet_(SpreadsheetApp.getActive(), CFG.SHEET_MASTER);
+        const mVals = master.getDataRange().getValues();
+        if (mVals.length <= 1) return;
+        const mHdr = normalizeHeaderRow_(mVals[0]);
+        const mMap = mapHeaders_(mHdr);
+        const body = mVals.slice(1);
+        let updated = 0;
+        for (let i=0;i<body.length;i++){
+          const row = body[i];
+          const em  = String(row[mMap.email]||'').toLowerCase().trim();
+          if (em === email) {
+            if (first) row[mMap.firstName] = first;
+            if (last)  row[mMap.lastName]  = last;
+            if (ptin)  row[mMap.ptin]      = ptin;
+            row[mMap.masterIssueCol] = ''; // clear issue
+            updated++;
+          }
+        }
+        if (updated) {
+          master.getRange(2,1,body.length,mVals[0].length).setValues(body);
+          toast_(`Roster → Master: cleared Reporting Issue & synced ${updated} row(s) for ${email}.`);
+        }
+      }
+    }
+  } catch (err) {
+    toast_('onEdit error: ' + err.message, true);
+  }
+}
