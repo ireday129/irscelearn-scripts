@@ -1,6 +1,22 @@
-/** IRS CE TOOLS MAIN MENU **/
+/* eslint-env es6 */
+/* eslint-env googleappsscript */
 
-function onOpen() {
+/* global SpreadsheetApp, ScriptApp, Logger */
+/* global toast_ */
+/* global updateProgramReportedTotals */
+/* global syncMasterWithReportedHours */
+/* global buildCleanUpload, recheckMaster */
+/* global createNightlyTrigger, removeNightlyTrigger */
+/* global createNightlyGroupSyncTrigger, removeNightlyGroupSyncTrigger */
+/* global markCleanAsReported, exportCleanToXlsx */
+/* global syncGroupSheets, diagnoseGroupSync */
+/* global ingestSystemReportingIssues, applyReportingFixes */
+/* global dedupeRosterByEmail, backfillMasterFromRosterCombined */
+/* global updateRosterValidityFromIssues_, ensureAllTabs */
+/* global highlightRosterFromReportedHoursMenu */
+
+/** IRS CE TOOLS MAIN MENU **/
+function onOpen(e) {
   const ui = SpreadsheetApp.getUi();
   const menu = ui.createMenu('IRS CE Tools');
 
@@ -23,15 +39,16 @@ function onOpen() {
     .addItem('Apply Reporting Fixes (manual)', 'applyReportingFixes')
     .addSeparator()
     .addItem('Update Reporting Stats', 'updateReportingStatsMenu')
-    .addItem('Sync Reported Hours \u2192 Master', 'syncReportedToMasterMenu') // ← new menu item
+    .addItem('Sync Reported Hours -> Master', 'syncReportedToMasterMenu')
     .addSeparator()
     .addItem('Deduplicate Roster by Email', 'dedupeRosterByEmail')
-    .addItem('Backfill Master from Roster', 'backfillMasterFromRosterCombined') // COMBINED ITEM
+    .addItem('Backfill Master from Roster', 'backfillMasterFromRosterCombined')
     .addItem('Update Roster Validity from Issues', 'updateRosterValidityFromIssues_')
     .addSeparator()
     .addItem('Create/Repair Tabs (Clean & Issues only)', 'ensureAllTabs')
     .addSeparator()
-    .addItem('Diagnostics (Log all systems)', 'runDiagnostics');
+    .addItem('Diagnostics (Log all systems)', 'runDiagnostics')
+    .addItem('Highlight Roster from Reported Hours', 'highlightRosterFromReportedHoursMenu');
 
   menu.addToUi();
 }
@@ -49,35 +66,41 @@ function runDiagnostics() {
 
     logs.push('Triggers present:');
     ScriptApp.getProjectTriggers().forEach(t => {
-      logs.push(`  • ${t.getHandlerFunction()} (${t.getEventType()})`);
+      logs.push('  • ' + t.getHandlerFunction() + ' (' + t.getEventType() + ')');
     });
 
     Logger.log(logs.join('\n'));
     SpreadsheetApp.getActiveSpreadsheet().toast('Diagnostics complete. Check Execution Log.');
-  } catch (e) {
-    SpreadsheetApp.getActiveSpreadsheet().toast('Diagnostics failed: ' + e.message, 'IRS CE Tools', 5);
-    Logger.log(e.stack || e.message);
+  } catch (e2) {
+    SpreadsheetApp.getActiveSpreadsheet().toast('Diagnostics failed: ' + e2.message, 'IRS CE Tools', 5);
+    Logger.log(e2.stack || e2.message);
   }
 }
 
 /** Menu: Update Reporting Stats (calls reporting_stats.js) */
 function updateReportingStatsMenu() {
   try {
-    updateProgramReportedTotals();  // must exist in reporting_stats.js
+    if (typeof updateProgramReportedTotals !== 'function') {
+      throw new Error('updateProgramReportedTotals() is not loaded in this project.');
+    }
+    updateProgramReportedTotals();
     toast_('Reporting Stats updated from Reported Hours.');
-  } catch (e) {
-    toast_('Failed to update Reporting Stats: ' + e.message, true);
-    Logger.log(e.stack || e);
+  } catch (e3) {
+    toast_('Failed to update Reporting Stats: ' + e3.message, true);
+    Logger.log(e3.stack || e3);
   }
 }
 
 /** Menu: Sync Reported Hours → Master (calls sync_reported_to_master.js.gs) */
 function syncReportedToMasterMenu() {
   try {
-    syncMasterWithReportedHours(); // must exist in sync_reported_to_master.js.gs
+    if (typeof syncMasterWithReportedHours !== 'function') {
+      throw new Error('syncMasterWithReportedHours() is not loaded in this project.');
+    }
+    syncMasterWithReportedHours(); // performs the upsert
     toast_('Reported Hours → Master sync complete.');
-  } catch (e) {
-    toast_('Failed to sync Reported Hours → Master: ' + e.message, true);
-    Logger.log(e.stack || e);
+  } catch (e4) {
+    toast_('Failed to sync Reported Hours → Master: ' + e4.message, true);
+    Logger.log(e4.stack || e4);
   }
 }
