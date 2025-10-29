@@ -53,3 +53,59 @@ if (typeof normalizeCompletionForUpload_ !== 'function') {
     return d;
   }
 }
+
+/**
+ * Clears only the data body of the Clean sheet and writes new rows.
+ * @param {SpreadsheetApp.Spreadsheet} ss
+ * @param {Array<Object>} cleanRows - objects like:
+ *   { first, last, ptin, email, prog, hours, completion, issue }
+ */
+function writeCleanDataOnly_(ss, cleanRows) {
+  const sh = mustGet_(ss, CFG.SHEET_CLEAN);
+
+  // 1) Clear existing body (keep headers)
+  const lastRow = sh.getLastRow();
+  if (lastRow > 1) {
+    sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).clearContent();
+  }
+
+  // Nothing to write? we're done.
+  if (!cleanRows || !cleanRows.length) return;
+
+  // 2) Map headers to column indexes
+  const hdr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(x => String(x || '').trim());
+  const cMap = mapCleanHeaders_(hdr);
+  const iF  = cMap.firstName;
+  const iL  = cMap.lastName;
+  const iP  = cMap.ptin;
+  const iE  = cMap.email;
+  const iG  = cMap.program;
+  const iH  = cMap.hours;
+  const iC  = cMap.completion;
+  const iRI = cMap.issue;
+
+  if ([iF, iL, iP, iE, iG, iH, iC].some(v => v < 0)) {
+    toast_('Clean headers missing/renamed; cannot write rows.', true);
+    return;
+  }
+
+  // 3) Build rows in header order
+  const data = cleanRows.map(r => {
+    const arr = new Array(hdr.length).fill('');
+    arr[iF]  = r.first || '';
+    arr[iL]  = r.last || '';
+    arr[iP]  = formatPtinP0_(r.ptin || '');
+    arr[iE]  = String(r.email || '').toLowerCase().trim();
+    arr[iG]  = normalizeProgram_(r.prog || '');
+    arr[iH]  = r.hours || '';
+    arr[iC]  = formatToMDY_(r.completion || '');
+    if (iRI >= 0) arr[iRI] = r.issue ? String(r.issue).trim() : '';
+    return arr;
+  });
+
+  // 4) Write values and set date format on completion column
+  sh.getRange(2, 1, data.length, hdr.length).setValues(data);
+  if (iC >= 0) {
+    sh.getRange(2, iC + 1, data.length, 1).setNumberFormat('mm/dd/yyyy');
+  }
+}
