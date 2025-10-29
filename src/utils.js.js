@@ -69,3 +69,189 @@ function recheckMaster() {
     Logger.log(e.stack||e.message);
   }
 }
+
+/***** ====================== ROSTER ↔ WEBHOOK & HIGHLIGHT ====================== *****/
+
+/** Define webhook URL only if not already defined elsewhere */
+if (typeof WEBHOOK_URL === 'undefined') {
+  var WEBHOOK_URL = 'https://irscelearn.com/wp-json/uap/v2/uap-5213-5214';
+}
+
+/**
+ * Post webhook for a given Roster row (expects mapRosterHeaders_ to be available).
+ * Sends: { email, first_name, last_name }
+ */
+function postRosterWebhookForRow_(row, rMap) {
+  try {
+    const email = String(row[rMap.email] || '').trim().toLowerCase();
+    const first = String(row[rMap.first] || '').trim();
+    const last  = String(row[rMap.last]  || '').trim();
+    if (!email || !first || !last) {
+      Logger.log('Webhook skipped: missing email/first/last on row.');
+      return;
+    }
+
+    const payload = {
+      email: email,
+      first_name: first,
+      last_name: last
+    };
+
+    const res = UrlFetchApp.fetch(WEBHOOK_URL, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    const code = res.getResponseCode();
+    if (code >= 200 && code < 300) {
+      toast_('Webhook sent for ' + email);
+    } else {
+      Logger.log('Webhook non-2xx (' + code + '): ' + res.getContentText());
+      toast_('Webhook failed (' + code + ') for ' + email, true);
+    }
+  } catch (e) {
+    Logger.log('Webhook error: ' + (e.stack || e.message));
+    toast_('Webhook error: ' + e.message, true);
+  }
+}
+
+/**
+ * Highlight all Roster rows (yellow) whose PTIN appears in Reported Hours.
+ * Removes highlight for rows not in Reported Hours.
+ * - Uses PTIN only (program-agnostic).
+ */
+function refreshRosterHighlightsFromReportedHours(quiet) {
+  const ss = SpreadsheetApp.getActive();
+  const roster = ss.getSheetByName(CFG.SHEET_ROSTER);
+  const rh     = ss.getSheetByName('Reported Hours');
+  if (!roster || !rh) { if(!quiet) toast_('Roster or Reported Hours not found.', true); return; }
+
+  // Build set of PTINs from Reported Hours
+  const rhVals = rh.getDataRange().getValues();
+  if (rhVals.length <= 1) { if(!quiet) toast_('Reported Hours is empty; nothing to highlight.'); return; }
+  const rhHdr  = rhVals[0].map(s=>String(s||'').trim());
+  const iRhPT  = rhHdr.findIndex(h => /^ptin$/i.test(String(h)));
+  const iRhPT2 = rhHdr.findIndex(h => /attendee ptin/i.test(String(h)));
+  const idxPT  = iRhPT >= 0 ? iRhPT : iRhPT2;
+  if (idxPT < 0) { if(!quiet) toast_('Reported Hours missing PTIN column.', true); return; }
+
+  const ptinSet = new Set();
+  for (let r=1; r<rhVals.length; r++) {
+    const pt = formatPtinP0_(rhVals[r][idxPT] || '');
+    if (pt) ptinSet.add(pt);
+  }
+
+  // Map Roster headers
+  const rMap = mapRosterHeaders_(roster);
+  if (!rMap) { if(!quiet) toast_('Roster headers not recognized.', true); return; }
+
+  const rVals = roster.getDataRange().getValues();
+  if (rVals.length <= 1) return;
+
+  // Prepare background updates
+  const startRow = 2;
+  const numRows  = rVals.length - 1;
+  const numCols  = roster.getLastColumn();
+
+  if (numRows <= 0) return;
+
+  // Current backgrounds
+  const bgRange = roster.getRange(startRow, 1, numRows, numCols);
+  const bgs = bgRange.getBackgrounds();
+
+  const YELLOW  = '#fff59d';
+  const CLEAR   = '#ffffff';
+
+  let changed = 0;
+  for (let i=0; i<numRows; i++) {
+    const row = rVals[i+1];
+    const pt  = formatPtinP0_(row[rMap.ptin] || '');
+    const shouldHighlight = !!(pt && ptinSet.has(pt));
+
+    // Only set the first column’s bg; then copy across row for speed
+    const currentIsYellow = (bgs[i][0] || '').toLowerCase() === YELLOW;
+    if (shouldHighlight && !currentIsYellow) {
+      for (let c=0; c<numCols; c++) bgs[i][c] = YELLOW;
+      changed++;
+    } else if (!shouldHighlight && currentIsYellow) {
+      for (let c=0; c<numCols; c++) bgs[i][c] = CLEAR;
+      changed++;
+    }
+  }
+
+  if (changed) {
+    bgRange.setBackgrounds(bgs);
+  }
+
+  if (!quiet) toast_('Roster highlight sync done (' + changed + ' row style update' + (changed===1?'':'s') + ').');
+}
+
+/** Safe function caller to avoid onEdit hard-crashes (only define if missing). */
+if (typeof safeCall_ !== 'function') {
+  function safeCall_(fn, arg) {
+    try { if (typeof fn === 'function') fn(arg); } catch (e) { Logger.log(e.stack || e.message); }
+  }
+}
+
+/**
+ * Unified onEdit:
+ *  - Calls existing processMasterEdits(e) safely (if present)
+ *  - Detects Roster → Valid? changes; when set TRUE => posts webhook and clears highlight for that row
+ * If an onEdit already exists, we wrap it to preserve prior behavior.
+ */
+(function(){
+  var __hadOnEdit = (typeof onEdit === 'function');
+  var __prevOnEdit = __hadOnEdit ? onEdit : null;
+
+  function rosterOnEditBlock_(e) {
+    try {
+      if (!e || !e.range) return;
+      const sh = e.range.getSheet();
+      if (!sh) return;
+
+      const rosterName = String(CFG.SHEET_ROSTER || 'Roster').trim();
+      if (sh.getName() !== rosterName) return;
+
+      const rMap = mapRosterHeaders_(sh);
+      if (!rMap || rMap.valid < 0) return;
+
+      const editedCol = e.range.getColumn() - 1; // zero-based
+      if (editedCol !== rMap.valid) return;
+
+      // React only when set to TRUE
+      const nowTrue = parseBool_(e.value);
+      if (!nowTrue) return;
+
+      const rowIdx = e.range.getRow(); // 1-based
+      if (rowIdx <= 1) return; // skip header
+
+      const rowVals = sh.getRange(rowIdx, 1, 1, sh.getLastColumn()).getValues()[0];
+
+      // Fire webhook
+      postRosterWebhookForRow_(rowVals, rMap);
+
+      // Clear highlight for that row
+      const numCols = sh.getLastColumn();
+      const clearBg = new Array(numCols).fill('#ffffff');
+      sh.getRange(rowIdx, 1, 1, numCols).setBackgrounds([clearBg]);
+
+    } catch (err) {
+      Logger.log('onEdit roster block error: ' + (err.stack || err.message));
+    }
+  }
+
+  onEdit = function(e) {
+    // Run any previously defined onEdit
+    if (__prevOnEdit) {
+      try { __prevOnEdit(e); } catch (err) { Logger.log('prev onEdit error: ' + (err.stack || err.message)); }
+    }
+
+    // Master-side edit handling if you have it
+    safeCall_(processMasterEdits, e);
+
+    // Roster handler for Valid? TRUE → webhook + unhighlight
+    rosterOnEditBlock_(e);
+  };
+})();
