@@ -274,3 +274,57 @@ if (typeof safeCall_ !== 'function') {
   // Expose to global scope if not already present or replace if needed
   this.writeCleanDataOnly_ = writeCleanDataOnly_;
 })();
+
+/**
+ * Build an index of unresolved issues from Master.
+ * Returns sets keyed by PTIN|Program, email|Program, and "first last"|Program (all normalized).
+ * Only includes rows where Master."Reporting Issue?" is non-blank and not "fixed".
+ */
+function buildUnresolvedIssueIndex_() {
+  var ss = SpreadsheetApp.getActive();
+  var out = {
+    byPtinProg: new Set(),
+    byEmailProg: new Set(),
+    byNameProg: new Set()
+  };
+
+  var master = ss.getSheetByName(CFG.SHEET_MASTER);
+  if (!master || master.getLastRow() <= 1) return out;
+
+  var mVals = master.getDataRange().getValues();
+  var mHdr  = normalizeHeaderRow_(mVals[0]);
+  var mm    = mapHeaders_(mHdr);
+
+  // Required indexes we rely on; guard for missing columns
+  var iIssue = mm.masterIssueCol;
+  var iProg  = mm.program;
+  var iPtin  = mm.ptin;
+  var iEmail = mm.email;
+  var iFname = mm.firstName;
+  var iLname = mm.lastName;
+
+  if (iIssue == null || iProg == null) return out;
+
+  var body = mVals.slice(1);
+  for (var r = 0; r < body.length; r++) {
+    var row   = body[r];
+    var issue = String(row[iIssue] || '').trim();
+
+    // Skip blank or explicitly 'fixed'
+    if (!issue || /^fixed$/i.test(issue)) continue;
+
+    var prog = normalizeProgram_(row[iProg] || '');
+    if (!prog) continue;
+
+    var ptin  = (iPtin  != null) ? formatPtinP0_(row[iPtin]  || '') : '';
+    var email = (iEmail != null) ? String(row[iEmail] || '').toLowerCase().trim() : '';
+    var fn    = (iFname != null) ? String(row[iFname] || '').trim().toLowerCase() : '';
+    var ln    = (iLname != null) ? String(row[iLname] || '').trim().toLowerCase() : '';
+
+    if (ptin) out.byPtinProg.add(ptin + '|' + prog);
+    if (email) out.byEmailProg.add(email + '|' + prog);
+    if (fn && ln) out.byNameProg.add(fn + ' ' + ln + '|' + prog);
+  }
+
+  return out;
+}
