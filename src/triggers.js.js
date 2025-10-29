@@ -1,5 +1,5 @@
 /* global SpreadsheetApp, CFG, toast_, mapRosterHeaders_, parseBool_ */
-/* global postRosterValidWebhook_, highlightRosterFromReportedHours */
+/* global postRosterValidWebhook_, highlightRosterFromReportedHours, PropertiesService */
 
 /**
  * INSTALLABLE on-edit entrypoint.
@@ -711,31 +711,35 @@ function handleRosterValidEdit_(e){
           toast_(`Roster → Master: cleared Reporting Issue & synced ${updated} row(s) for ${email}.`);
         }
 
-        // ✅ Clear row highlight when Valid? is TRUE
-        // Paint the whole row white (single call is sufficient unless CF overrides)
+        // ✅ Force the entire row to white immediately
         var cols = sh.getLastColumn();
         var rowRange = sh.getRange(r, 1, 1, cols);
-        rowRange.setBackground(null); // clear to default (in case white is overridden), then force white next line
+        rowRange.setBackground(null);
         rowRange.setBackground('#ffffff');
         SpreadsheetApp.flush();
+        // And pin it white by putting a high‑priority row CF rule first
+        forceRosterRowWhite_(sh, r);
 
-        // Re-run roster highlight routine so this row is excluded from yellow (if that routine exists).
-        // That routine should skip rows where Valid? = TRUE.
+        // ✅ Fire webhook once per contact (idempotent by email)
         try {
-          if (typeof highlightRosterFromReportedHours === 'function') {
-            highlightRosterFromReportedHours(true); // quiet refresh
+          var props = PropertiesService.getScriptProperties();
+          var key = 'roster_webhook:' + email;
+          var already = props.getProperty(key);
+          if (!already) {
+            var ok = postRosterValidWebhook_({
+              email: email,
+              first_name: first,
+              last_name: last
+            });
+            if (ok) {
+              props.setProperty(key, String(new Date().getTime()));
+              toast_('Webhook recorded for ' + email + '.', false);
+            } else {
+              Logger.log('Webhook failed (non-2xx), will allow retry on next Valid? action for ' + email);
+            }
+          } else {
+            Logger.log('Webhook already sent for ' + email + ' (skip)');
           }
-        } catch (_err) {
-          Logger.log('highlightRosterFromReportedHours refresh failed: ' + _err);
-        }
-
-        // ✅ Fire webhook with attendee info
-        try {
-          postRosterValidWebhook_({
-            email: email,
-            first_name: first,
-            last_name: last
-          });
         } catch (err) {
           Logger.log('postRosterValidWebhook_ failed: ' + (err && err.message ? err.message : err));
         }
@@ -764,10 +768,11 @@ function formatPtinP0_(ptinRaw) {
 /**
  * POST a webhook to WordPress when a Roster entry is marked Valid? = TRUE.
  * Payload: { email, first_name, last_name }
+ * Returns boolean: true if webhook succeeded (2xx), false otherwise.
  */
 function postRosterValidWebhook_(payload) {
   var url = 'https://irscelearn.com/wp-json/uap/v2/uap-5213-5214';
-  if (!payload || !payload.email) return;
+  if (!payload || !payload.email) return false;
 
   var options = {
     method: 'post',
@@ -781,28 +786,44 @@ function postRosterValidWebhook_(payload) {
   var code = res.getResponseCode();
   if (code >= 200 && code < 300) {
     toast_('Roster Valid webhook sent for ' + payload.email + '.', false);
+    return true;
   } else {
     Logger.log('Webhook non-2xx (' + code + '): ' + (res && res.getContentText ? res.getContentText() : ''));
     toast_('Webhook error (' + code + ') for ' + payload.email + '.', true);
+    return false;
   }
 }
 
 /**
- * Force a single Roster row to stay white by appending a row-scoped CF rule that sets white.
- * Use sparingly to avoid too many rules; prefer re-running highlightRosterFromReportedHours which should skip Valid?=TRUE rows.
+ * Prepends a row-scoped white conditional format rule for this row (overrides yellow).
+ * Removes any prior per-row white rules for this row to avoid rule bloat.
  */
 function forceRosterRowWhite_(sh, rowIndex) {
   if (!sh || rowIndex < 2) return;
   var cols = sh.getLastColumn();
   var range = sh.getRange(rowIndex, 1, 1, cols);
-  // Append a one-off white rule for this row (placed at the end; later rules usually win).
-  var rules = sh.getConditionalFormatRules() || [];
-  var rule = SpreadsheetApp.newConditionalFormatRule()
+  // Build a high‑priority white rule for this row
+  var newRule = SpreadsheetApp.newConditionalFormatRule()
     .whenFormulaSatisfied('=TRUE')
     .setBackground('#ffffff')
     .setRanges([range])
     .build();
-  rules.push(rule);
+
+  var rules = sh.getConditionalFormatRules() || [];
+  // Drop any existing row-scoped white rules we previously added for this row
+  rules = rules.filter(function(rule) {
+    var rs = rule.getRanges && rule.getRanges();
+    if (!rs || !rs.length) return true;
+    // keep rules that don't exactly match this row range
+    return !(rs.length === 1 &&
+             rs[0].getRow() === rowIndex &&
+             rs[0].getNumRows() === 1 &&
+             rs[0].getColumn() === 1 &&
+             rs[0].getNumColumns() === cols &&
+             rule.copy().build().getBackground() === '#ffffff');
+  });
+  // Prepend our white rule so it has highest priority
+  rules.unshift(newRule);
   sh.setConditionalFormatRules(rules);
   SpreadsheetApp.flush();
 }
