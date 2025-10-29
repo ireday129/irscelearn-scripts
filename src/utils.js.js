@@ -109,3 +109,56 @@ function writeCleanDataOnly_(ss, cleanRows) {
     sh.getRange(2, iC + 1, data.length, 1).setNumberFormat('mm/dd/yyyy');
   }
 }
+
+// --- unresolved issue index (define once) ---
+// Scans Master and returns keys for rows still carrying a Reporting Issue?
+// Output: { byPtinProg:Set, byEmailProg:Set, byNameProg:Set }
+if (typeof buildUnresolvedIssueIndex_ !== 'function') {
+  function buildUnresolvedIssueIndex_() {
+    const ss = SpreadsheetApp.getActive();
+    const out = {
+      byPtinProg: new Set(),
+      byEmailProg: new Set(),
+      byNameProg: new Set()
+    };
+
+    const master = ss.getSheetByName(CFG.SHEET_MASTER);
+    if (!master || master.getLastRow() <= 1) return out;
+
+    const mVals = master.getDataRange().getValues();
+    const mHdr  = normalizeHeaderRow_(mVals[0]);
+    const mm    = mapHeaders_(mHdr);
+
+    const iF = mm.firstName;
+    const iL = mm.lastName;
+    const iP = mm.ptin;
+    const iE = mm.email;
+    const iG = mm.program;
+    const iIssue = mm.masterIssueCol;
+
+    if (iIssue == null || iG == null) return out;
+
+    const body = mVals.slice(1);
+    for (let r = 0; r < body.length; r++) {
+      const row = body[r];
+
+      // consider any non-blank, non-'fixed' issue as unresolved
+      const issue = String(row[iIssue] || '').trim().toLowerCase();
+      if (!issue || issue === 'fixed') continue;
+
+      const prog  = normalizeProgram_(row[iG] || '');
+      if (!prog) continue;
+
+      const ptin  = iP != null ? formatPtinP0_(row[iP] || '') : '';
+      const email = iE != null ? String(row[iE] || '').toLowerCase().trim() : '';
+      const fn    = iF != null ? String(row[iF] || '').trim().toLowerCase() : '';
+      const ln    = iL != null ? String(row[iL] || '').trim().toLowerCase() : '';
+
+      if (ptin) out.byPtinProg.add(ptin + '|' + prog);
+      if (email) out.byEmailProg.add(email + '|' + prog);
+      if (fn && ln) out.byNameProg.add(fn + ' ' + ln + '|' + prog);
+    }
+
+    return out;
+  }
+}
