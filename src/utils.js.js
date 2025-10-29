@@ -255,3 +255,22 @@ if (typeof safeCall_ !== 'function') {
     rosterOnEditBlock_(e);
   };
 })();
+(function() {
+  // Add or replace writeCleanDataOnly_ at the end of the file.
+  /**
+   * Clears only the data body of the Clean sheet (keeps header row).
+   * Safe to call even if the sheet is empty. The second parameter is accepted
+   * for backward compatibility with older callers but is ignored.
+   * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} ss Active spreadsheet handle
+   * @param {*} _cleanRows (ignored)
+   */
+  function writeCleanDataOnly_(ss, _cleanRows) {
+    var sh = mustGet_(ss, CFG.SHEET_CLEAN);
+    var last = sh.getLastRow();
+    if (last > 1) {
+      sh.getRange(2, 1, last - 1, sh.getLastColumn()).clearContent();
+    }
+  }
+  // Expose to global scope if not already present or replace if needed
+  this.writeCleanDataOnly_ = writeCleanDataOnly_;
+})();

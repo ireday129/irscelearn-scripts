@@ -688,10 +688,21 @@ function handleRosterValidEdit_(e){
         }
 
         // ✅ Clear row highlight when Valid? is TRUE
+        // Paint the whole row white (single call is sufficient unless CF overrides)
         var cols = sh.getLastColumn();
-        var whites = [Array(cols).fill('#ffffff')];
-        sh.getRange(r, 1, 1, cols).setBackgrounds(whites);
+        var rowRange = sh.getRange(r, 1, 1, cols);
+        rowRange.setBackground('#ffffff');
         SpreadsheetApp.flush();
+
+        // Re-run roster highlight routine so this row is excluded from yellow (if that routine exists).
+        // That routine should skip rows where Valid? = TRUE.
+        try {
+          if (typeof highlightRosterFromReportedHours === 'function') {
+            highlightRosterFromReportedHours(true); // quiet refresh
+          }
+        } catch (_err) {
+          Logger.log('highlightRosterFromReportedHours refresh failed: ' + _err);
+        }
 
         // ✅ Fire webhook with attendee info
         try {
@@ -749,4 +760,24 @@ function postRosterValidWebhook_(payload) {
     Logger.log('Webhook non-2xx (' + code + '): ' + (res && res.getContentText ? res.getContentText() : ''));
     toast_('Webhook error (' + code + ') for ' + payload.email + '.', true);
   }
+}
+
+/**
+ * Force a single Roster row to stay white by appending a row-scoped CF rule that sets white.
+ * Use sparingly to avoid too many rules; prefer re-running highlightRosterFromReportedHours which should skip Valid?=TRUE rows.
+ */
+function forceRosterRowWhite_(sh, rowIndex) {
+  if (!sh || rowIndex < 2) return;
+  var cols = sh.getLastColumn();
+  var range = sh.getRange(rowIndex, 1, 1, cols);
+  // Append a one-off white rule for this row (placed at the end; later rules usually win).
+  var rules = sh.getConditionalFormatRules() || [];
+  var rule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=TRUE')
+    .setBackground('#ffffff')
+    .setRanges([range])
+    .build();
+  rules.push(rule);
+  sh.setConditionalFormatRules(rules);
+  SpreadsheetApp.flush();
 }

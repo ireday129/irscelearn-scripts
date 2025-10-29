@@ -631,10 +631,70 @@ function backfillMasterSourceFromRoster_(quiet){
   }
 }
 
+/** Paint a roster row's background (columns 1..lastCol) to WHITE without touching values. */
+function paintRosterRowWhite_(sheet, row) {
+  const lastCol = sheet.getLastColumn();
+  if (row < 2 || lastCol < 1) return;
+  const WHITE = '#ffffff';
+  const arr = [new Array(lastCol).fill(WHITE)];
+  sheet.getRange(row, 1, 1, lastCol).setBackgrounds(arr);
+}
+
+/** TRUE if this edit toggled the Roster's Valid? column. */
+function isRosterValidToggle_(e, rosterName) {
+  if (!e || !e.range || !e.range.getSheet) return false;
+  const sh = e.range.getSheet();
+  if (sh.getName() !== rosterName) return false;
+
+  // Map headers once
+  const map = mapRosterHeaders_(sh);
+  if (!map || map.valid == null || map.valid < 0) return false;
+
+  // e.range.getColumn() is 1-based
+  return e.range.getColumn() === (map.valid + 1);
+}
+
+/**
+ * Helper that runs early in onEdit:
+ * When Valid? is checked -> paint row white and (optionally) ping webhook.
+ * IMPORTANT: Does not modify checkbox cell or any values—only background color.
+ */
+function processRosterValidToggle_(e) {
+  try {
+    const rosterName = CFG.SHEET_ROSTER;
+    if (!isRosterValidToggle_(e, rosterName)) return;
+
+    const sh  = e.range.getSheet();
+    const row = e.range.getRow();
+    const isNowTrue = parseBool_(e.value);
+
+    if (isNowTrue) {
+      // Visual reset
+      paintRosterRowWhite_(sh, row);
+
+      // If you still want to fire the webhook on manual TRUE, leave this call:
+      try {
+        if (typeof postRosterValidWebhookFromRow_ === 'function') {
+          postRosterValidWebhookFromRow_(sh, row);
+        }
+      } catch (err) {
+        Logger.log('Webhook post failed: ' + err.message);
+      }
+    }
+  } catch (err) {
+    Logger.log('processRosterValidToggle_ error: ' + err.message);
+  }
+}
+
 /** onEdit: mark Roster Valid? TRUE pushes fixes to Master **/
+/** onEdit: mark Roster Valid? TRUE -> paint row white, sync Master, and fire webhook (if available) **/
 function onEdit(e){
   try {
     if (!e || !e.range) return;
+
+    // Always run the Valid? toggle helper first (it only paints and optionally posts; no value writes to Roster).
+    processRosterValidToggle_(e);
+
     const sh = e.range.getSheet();
     if (sh.getName() !== CFG.SHEET_ROSTER) return;
     const map = mapRosterHeaders_(sh);
@@ -645,6 +705,10 @@ function onEdit(e){
       const newVal = e.value;
       if (parseBool_(newVal)) {
         const r = e.range.getRow();
+
+        // Paint the entire row white immediately for visual reset
+        paintRosterRowWhite_(sh, r);
+
         const vals = sh.getRange(r, 1, 1, sh.getLastColumn()).getValues()[0];
 
         const first = String(vals[map.first]||'').trim();
@@ -668,13 +732,22 @@ function onEdit(e){
             if (first) row[mMap.firstName] = first;
             if (last)  row[mMap.lastName]  = last;
             if (ptin)  row[mMap.ptin]      = ptin;
-            row[mMap.masterIssueCol] = ''; // clear issue
+            if (mMap.masterIssueCol != null) row[mMap.masterIssueCol] = ''; // clear issue
             updated++;
           }
         }
         if (updated) {
           master.getRange(2,1,body.length,mVals[0].length).setValues(body);
           toast_(`Roster → Master: cleared Reporting Issue & synced ${updated} row(s) for ${email}.`);
+        }
+
+        // Attempt to fire the webhook for this row (defined in roster_webhook.js.js)
+        try {
+          if (typeof postRosterValidWebhookFromRow_ === 'function') {
+            postRosterValidWebhookFromRow_(sh, r);
+          }
+        } catch (err) {
+          Logger.log('Webhook post failed: ' + err.message);
         }
       }
     }
