@@ -570,6 +570,111 @@ function backfillMasterPtinFromRoster_(quiet){
   if (changes) master.getRange(2,1,body.length,mVals[0].length).setValues(body);
 }
 
+/**
+ * Backfill Roster from Master, but ONLY from Master rows where Reported? === TRUE.
+ * - Match by Email first, then by PTIN as fallback.
+ * - Fill blanks only on the Roster row (do not overwrite non-empty cells).
+ * - Does NOT append new rows to Roster; it only updates existing ones.
+ * - Fields backfilled: First Name, Last Name, PTIN, Group (if present on Roster), Email (if blank).
+ */
+function backfillRosterFromMasterReported_(quiet) {
+  const ss = SpreadsheetApp.getActive();
+  const rosterSh = ss.getSheetByName(CFG.SHEET_ROSTER);
+  const masterSh = ss.getSheetByName(CFG.SHEET_MASTER);
+
+  if (!rosterSh || !masterSh) { if(!quiet) toast_('Roster or Master sheet not found.', true); return; }
+
+  // Map headers
+  const rMap = mapRosterHeaders_(rosterSh);
+  if (!rMap) { if(!quiet) toast_('Roster headers missing or renamed.', true); return; }
+
+  const mVals = masterSh.getDataRange().getValues();
+  if (mVals.length <= 1) { if(!quiet) toast_('Master is empty; nothing to backfill.', false); return; }
+
+  const mHdr = normalizeHeaderRow_(mVals[0]);
+  const mMap = mapHeaders_(mHdr);
+
+  // Ensure Master has the columns we need
+  if (mMap.email == null || mMap.program == null || mMap.reportedCol == null) {
+    if (!quiet) toast_('Master is missing Email/Program/Reported? columns.', true);
+    return;
+  }
+
+  // Build Roster index by Email and PTIN
+  const rLastRow = rosterSh.getLastRow();
+  if (rLastRow < 2) { if(!quiet) toast_('Roster has no data rows to backfill.', false); return; }
+
+  const rRange = rosterSh.getRange(2, 1, rLastRow - 1, rosterSh.getLastColumn());
+  const rVals = rRange.getValues();
+
+  const byEmail = new Map(); // email -> rowIndex in rVals
+  const byPtin  = new Map(); // ptin  -> rowIndex in rVals
+  for (let i = 0; i < rVals.length; i++) {
+    const row = rVals[i];
+    const email = rMap.email >= 0 ? String(row[rMap.email] || '').toLowerCase().trim() : '';
+    const ptin  = rMap.ptin  >= 0 ? formatPtinP0_(row[rMap.ptin]  || '') : '';
+    if (email) byEmail.set(email, i);
+    if (ptin)  byPtin.set(ptin, i);
+  }
+
+  let updates = 0;
+
+  // Walk Master (skip header)
+  for (let r = 1; r < mVals.length; r++) {
+    const mrow = mVals[r];
+
+    // Only use rows that are already Reported? === TRUE
+    const isReported = parseBool_(mrow[mMap.reportedCol]);
+    if (!isReported) continue;
+
+    const mEmail = mMap.email != null ? String(mrow[mMap.email] || '').toLowerCase().trim() : '';
+    const mPtin  = mMap.ptin  != null ? formatPtinP0_(mrow[mMap.ptin] || '') : '';
+    if (!mEmail && !mPtin) continue; // need at least one key
+
+    // Locate roster row by email, then PTIN
+    let rIdx = -1;
+    if (mEmail && byEmail.has(mEmail)) rIdx = byEmail.get(mEmail);
+    else if (mPtin && byPtin.has(mPtin)) rIdx = byPtin.get(mPtin);
+
+    if (rIdx < 0) continue; // do not append new rows; update only
+
+    const rRow = rVals[rIdx];
+
+    // Fill blanks only
+    if (rMap.first >= 0 && isBlankCell_(rRow[rMap.first]) && mMap.firstName != null) {
+      const v = String(mrow[mMap.firstName] || '').trim();
+      if (v) { rRow[rMap.first] = v; updates++; }
+    }
+    if (rMap.last >= 0 && isBlankCell_(rRow[rMap.last]) && mMap.lastName != null) {
+      const v = String(mrow[mMap.lastName] || '').trim();
+      if (v) { rRow[rMap.last] = v; updates++; }
+    }
+    if (rMap.ptin >= 0 && isBlankCell_(rRow[rMap.ptin]) && mMap.ptin != null) {
+      const v = formatPtinP0_(mrow[mMap.ptin] || '');
+      if (v) { rRow[rMap.ptin] = v; updates++; }
+    }
+    if (rMap.email >= 0 && isBlankCell_(rRow[rMap.email]) && mMap.email != null) {
+      const v = String(mrow[mMap.email] || '').toLowerCase().trim();
+      if (v) { rRow[rMap.email] = v; updates++; }
+    }
+
+    // If Roster has a Group column and it's blank, try to fill from Master 'group' or 'source'
+    if (rMap.group >= 0 && isBlankCell_(rRow[rMap.group])) {
+      let g = '';
+      if (mMap.group != null) g = String(mrow[mMap.group] || '').trim();
+      else if (typeof mMap.source !== 'undefined' && mMap.source != null) g = String(mrow[mMap.source] || '').trim();
+      if (g) { rRow[rMap.group] = g; updates++; }
+    }
+  }
+
+  if (updates) {
+    rRange.setValues(rVals);
+    if (!quiet) toast_(`Roster backfilled from Master (Reported?=TRUE only): ${updates} cell update${updates===1?'':'s'}.`);
+  } else if (!quiet) {
+    toast_('No Roster cells needed backfilling from Reported Master rows.');
+  }
+}
+
 /** onEdit: mark Roster Valid? TRUE pushes fixes to Master **/
 function onEdit(e){
   try {
