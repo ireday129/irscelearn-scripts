@@ -110,6 +110,54 @@ function writeCleanDataOnly_(ss, cleanRows) {
   }
 }
 
+/**
+ * Append staged rows to the Clean sheet (no duplicate removal here).
+ * Intended for resumable batch writes.
+ * cleanRows = [{ first, last, ptin, email, prog, hours, completion, issue }]
+ */
+function appendToClean_(ss, cleanRows) {
+  if (!cleanRows || !cleanRows.length) return;
+
+  const sh = mustGet_(ss, CFG.SHEET_CLEAN);
+  const hdr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(x => String(x || '').trim());
+  const cMap = mapCleanHeaders_(hdr);
+
+  const iF  = cMap.firstName;
+  const iL  = cMap.lastName;
+  const iP  = cMap.ptin;
+  const iE  = cMap.email;
+  const iG  = cMap.program;
+  const iH  = cMap.hours;
+  const iC  = cMap.completion;
+  const iRI = cMap.issue;
+
+  if ([iF,iL,iP,iE,iG,iH,iC].some(v => v < 0)) {
+    toast_('Clean headers missing/renamed — append aborted', true);
+    return;
+  }
+
+  const start = sh.getLastRow() + 1;
+  const data = cleanRows.map(r => {
+    const arr = new Array(hdr.length).fill('');
+    arr[iF]  = r.first || '';
+    arr[iL]  = r.last || '';
+    arr[iP]  = formatPtinP0_(r.ptin || '');
+    arr[iE]  = String(r.email || '').toLowerCase().trim();
+    arr[iG]  = normalizeProgram_(r.prog || '');
+    arr[iH]  = r.hours || '';
+    arr[iC]  = formatToMDY_(r.completion || '');
+    if (iRI >= 0) arr[iRI] = r.issue ? String(r.issue).trim() : '';
+    return arr;
+  });
+
+  sh.getRange(start, 1, data.length, hdr.length).setValues(data);
+
+  if (iC >= 0) {
+    sh.getRange(start, iC + 1, data.length, 1).setNumberFormat('mm/dd/yyyy');
+  }
+}
+
 // --- unresolved issue index (define once) ---
 // Scans Master and returns keys for rows still carrying a Reporting Issue?
 // Output: { byPtinProg:Set, byEmailProg:Set, byNameProg:Set }
