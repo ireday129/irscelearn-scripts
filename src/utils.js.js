@@ -326,5 +326,16 @@ function buildUnresolvedIssueIndex_() {
     if (fn && ln) out.byNameProg.add(fn + ' ' + ln + '|' + prog);
   }
 
-  return out;
+return out;
+}
+
+// --- name comparison helper (define once) ---
+if (typeof namesMatchFull_ !== 'function') {
+  function namesMatchFull_(f1, l1, f2, l2) {
+    const norm = s => String(s || '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+    return norm(f1) === norm(f2) && norm(l1) === norm(l2);
+  }
 }
