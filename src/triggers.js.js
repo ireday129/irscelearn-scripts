@@ -1,3 +1,26 @@
+/* global SpreadsheetApp, CFG, toast_, mapRosterHeaders_, parseBool_ */
+/* global postRosterValidWebhook_, highlightRosterFromReportedHours */
+
+/**
+ * INSTALLABLE on-edit entrypoint.
+ * Create once in Apps Script: Triggers ➜ Add Trigger ➜ Function: onEditInstallable
+ * Source: From spreadsheet, Event type: On edit
+ * Needed so UrlFetchApp (webhooks) can run.
+ */
+function onEditInstallable(e) {
+  try {
+    if (!e || !e.range) return;
+    const sh = e.range.getSheet();
+    const rosterName = String(CFG.SHEET_ROSTER || 'Roster').trim().toLowerCase();
+    if (sh.getName().trim().toLowerCase() !== rosterName) return;
+
+    // Reuse the same handler as simple onEdit
+    handleRosterValidEdit_(e);
+  } catch (err) {
+    Logger.log('onEditInstallable error: ' + (err.stack || err.message));
+  }
+}
+
 /** ROSTER HELPERS + onEdit (override-style dedupe, supports Group) **/
 
 function mapRosterHeaders_(sh){
@@ -161,7 +184,7 @@ function generateRosterFromMaster(quiet) {
       // Create a new Roster row array from Master data
       const masterRosterRow = Array(rosterMap.hdr.length).fill('');
       masterRosterRow[rosterMap.first] = first;
-      masterRosterRow[roosterMap.last] = last;
+      masterRosterRow[rosterMap.last] = last;
       masterRosterRow[rosterMap.ptin] = ptin; // Formatted PTIN
       masterRosterRow[rosterMap.email] = email; 
       masterRosterRow[rosterMap.group] = rosterGroupValue;
@@ -631,72 +654,21 @@ function backfillMasterSourceFromRoster_(quiet){
   }
 }
 
-/** Paint a roster row's background (columns 1..lastCol) to WHITE without touching values. */
-function paintRosterRowWhite_(sheet, row) {
-  const lastCol = sheet.getLastColumn();
-  if (row < 2 || lastCol < 1) return;
-  const WHITE = '#ffffff';
-  const arr = [new Array(lastCol).fill(WHITE)];
-  sheet.getRange(row, 1, 1, lastCol).setBackgrounds(arr);
-}
-
-/** TRUE if this edit toggled the Roster's Valid? column. */
-function isRosterValidToggle_(e, rosterName) {
-  if (!e || !e.range || !e.range.getSheet) return false;
-  const sh = e.range.getSheet();
-  if (sh.getName() !== rosterName) return false;
-
-  // Map headers once
-  const map = mapRosterHeaders_(sh);
-  if (!map || map.valid == null || map.valid < 0) return false;
-
-  // e.range.getColumn() is 1-based
-  return e.range.getColumn() === (map.valid + 1);
-}
-
-/**
- * Helper that runs early in onEdit:
- * When Valid? is checked -> paint row white and (optionally) ping webhook.
- * IMPORTANT: Does not modify checkbox cell or any values—only background color.
- */
-function processRosterValidToggle_(e) {
+/** onEdit: mark Roster Valid? TRUE pushes fixes to Master **/
+function onEdit(e){
   try {
-    const rosterName = CFG.SHEET_ROSTER;
-    if (!isRosterValidToggle_(e, rosterName)) return;
-
-    const sh  = e.range.getSheet();
-    const row = e.range.getRow();
-    const isNowTrue = parseBool_(e.value);
-
-    if (isNowTrue) {
-      // Visual reset
-      paintRosterRowWhite_(sh, row);
-
-      // If you still want to fire the webhook on manual TRUE, leave this call:
-      try {
-        if (typeof postRosterValidWebhookFromRow_ === 'function') {
-          postRosterValidWebhookFromRow_(sh, row);
-        }
-      } catch (err) {
-        Logger.log('Webhook post failed: ' + err.message);
-      }
-    }
+    handleRosterValidEdit_(e);
   } catch (err) {
-    Logger.log('processRosterValidToggle_ error: ' + err.message);
+    toast_('onEdit dispatcher error: ' + (err && err.message ? err.message : err), true);
   }
 }
 
-/** onEdit: mark Roster Valid? TRUE pushes fixes to Master **/
-/** onEdit: mark Roster Valid? TRUE -> paint row white, sync Master, and fire webhook (if available) **/
-function onEdit(e){
+function handleRosterValidEdit_(e){
   try {
     if (!e || !e.range) return;
-
-    // Always run the Valid? toggle helper first (it only paints and optionally posts; no value writes to Roster).
-    processRosterValidToggle_(e);
-
     const sh = e.range.getSheet();
-    if (sh.getName() !== CFG.SHEET_ROSTER) return;
+    const rosterName = String(CFG.SHEET_ROSTER || 'Roster').trim().toLowerCase();
+    if (sh.getName().trim().toLowerCase() !== rosterName) return;
     const map = mapRosterHeaders_(sh);
     if (!map) return;
 
@@ -704,11 +676,9 @@ function onEdit(e){
     if (map.valid >= 0 && e.range.getRow() >= 2 && e.range.getColumn() === (map.valid + 1)) {
       const newVal = e.value;
       if (parseBool_(newVal)) {
+        // Immediately force the checkbox cell to stay checked in case other handlers race:
+        e.range.setValue(true);
         const r = e.range.getRow();
-
-        // Paint the entire row white immediately for visual reset
-        paintRosterRowWhite_(sh, r);
-
         const vals = sh.getRange(r, 1, 1, sh.getLastColumn()).getValues()[0];
 
         const first = String(vals[map.first]||'').trim();
@@ -732,7 +702,7 @@ function onEdit(e){
             if (first) row[mMap.firstName] = first;
             if (last)  row[mMap.lastName]  = last;
             if (ptin)  row[mMap.ptin]      = ptin;
-            if (mMap.masterIssueCol != null) row[mMap.masterIssueCol] = ''; // clear issue
+            row[mMap.masterIssueCol] = ''; // clear issue
             updated++;
           }
         }
@@ -741,14 +711,35 @@ function onEdit(e){
           toast_(`Roster → Master: cleared Reporting Issue & synced ${updated} row(s) for ${email}.`);
         }
 
-        // Attempt to fire the webhook for this row (defined in roster_webhook.js.js)
+        // ✅ Clear row highlight when Valid? is TRUE
+        // Paint the whole row white (single call is sufficient unless CF overrides)
+        var cols = sh.getLastColumn();
+        var rowRange = sh.getRange(r, 1, 1, cols);
+        rowRange.setBackground(null); // clear to default (in case white is overridden), then force white next line
+        rowRange.setBackground('#ffffff');
+        SpreadsheetApp.flush();
+
+        // Re-run roster highlight routine so this row is excluded from yellow (if that routine exists).
+        // That routine should skip rows where Valid? = TRUE.
         try {
-          if (typeof postRosterValidWebhookFromRow_ === 'function') {
-            postRosterValidWebhookFromRow_(sh, r);
+          if (typeof highlightRosterFromReportedHours === 'function') {
+            highlightRosterFromReportedHours(true); // quiet refresh
           }
-        } catch (err) {
-          Logger.log('Webhook post failed: ' + err.message);
+        } catch (_err) {
+          Logger.log('highlightRosterFromReportedHours refresh failed: ' + _err);
         }
+
+        // ✅ Fire webhook with attendee info
+        try {
+          postRosterValidWebhook_({
+            email: email,
+            first_name: first,
+            last_name: last
+          });
+        } catch (err) {
+          Logger.log('postRosterValidWebhook_ failed: ' + (err && err.message ? err.message : err));
+        }
+        Utilities.sleep(50);
       }
     }
   } catch (err) {
@@ -768,4 +759,50 @@ function formatPtinP0_(ptinRaw) {
     if (digits) v = 'P0' + digits.slice(-7).padStart(7,'0');
   }
   return v;
+}
+
+/**
+ * POST a webhook to WordPress when a Roster entry is marked Valid? = TRUE.
+ * Payload: { email, first_name, last_name }
+ */
+function postRosterValidWebhook_(payload) {
+  var url = 'https://irscelearn.com/wp-json/uap/v2/uap-5213-5214';
+  if (!payload || !payload.email) return;
+
+  var options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+    followRedirects: true
+  };
+
+  var res = UrlFetchApp.fetch(url, options);
+  var code = res.getResponseCode();
+  if (code >= 200 && code < 300) {
+    toast_('Roster Valid webhook sent for ' + payload.email + '.', false);
+  } else {
+    Logger.log('Webhook non-2xx (' + code + '): ' + (res && res.getContentText ? res.getContentText() : ''));
+    toast_('Webhook error (' + code + ') for ' + payload.email + '.', true);
+  }
+}
+
+/**
+ * Force a single Roster row to stay white by appending a row-scoped CF rule that sets white.
+ * Use sparingly to avoid too many rules; prefer re-running highlightRosterFromReportedHours which should skip Valid?=TRUE rows.
+ */
+function forceRosterRowWhite_(sh, rowIndex) {
+  if (!sh || rowIndex < 2) return;
+  var cols = sh.getLastColumn();
+  var range = sh.getRange(rowIndex, 1, 1, cols);
+  // Append a one-off white rule for this row (placed at the end; later rules usually win).
+  var rules = sh.getConditionalFormatRules() || [];
+  var rule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=TRUE')
+    .setBackground('#ffffff')
+    .setRanges([range])
+    .build();
+  rules.push(rule);
+  sh.setConditionalFormatRules(rules);
+  SpreadsheetApp.flush();
 }
