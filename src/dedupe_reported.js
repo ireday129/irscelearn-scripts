@@ -91,5 +91,40 @@ function dedupeReportedHoursMostRecentWinner(quiet) {
   if (oldRows > 0) sh.getRange(2, 1, oldRows, numCols).clearContent();
   if (winners.length) sh.getRange(2, 1, winners.length, numCols).setValues(winners);
 
-  if (!quiet) toast_(`Reported Hours de-duplicated (PTIN+Program): kept ${winners.length}, removed ${body.length - winners.length}.`);
+  if (!quiet) toast_(`Reported Hours de-duplicated (PTIN+Program): kept ${winners.length}, removed ${body.length - winners.length}.`);/**
+ * Dedupe "Reported Hours" by PTIN+Program Number, keeping the most recent Date Reported.
+ */
+function dedupeReportedHoursByPtinProgram() {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName('Reported Hours');
+  if (!sh || sh.getLastRow() < 2) { toast_('Reported Hours has no data.'); return; }
+
+  const vals = sh.getDataRange().getValues();
+  const hdr  = vals[0].map(s => String(s || '').trim());
+  const idx  = (label) => hdr.map(h => h.toLowerCase()).indexOf(label.toLowerCase());
+
+  const iPT  = idx('PTIN');
+  const iPG  = idx('Program Number');
+  const iDR  = idx('Date Reported');
+  if (iPT < 0 || iPG < 0 || iDR < 0) { toast_('Reported Hours missing PTIN/Program Number/Date Reported columns.', true); return; }
+
+  const keep = new Map(); // key -> {rowArray, date}
+  for (let r = 1; r < vals.length; r++) {
+    const row = vals[r];
+    const pt  = formatPtinP0_(row[iPT] || '');
+    const pg  = normalizeProgram_(row[iPG] || '');
+    if (!pt || !pg) continue;
+    const key = pt + '|' + pg;
+    const d   = parseDate_(row[iDR]) || new Date(0);
+    const cur = keep.get(key);
+    if (!cur || d > cur.date) keep.set(key, { row, date: d });
+  }
+
+  const out = [hdr].concat(Array.from(keep.values()).map(o => o.row));
+  sh.clearContents();
+  sh.getRange(1, 1, out.length, hdr.length).setValues(out);
+  if (iDR >= 0) sh.getRange(2, iDR + 1, out.length - 1, 1).setNumberFormat('mm/dd/yyyy');
+
+  toast_(`Reported Hours deduped: ${vals.length - 1} → ${out.length - 1}`);
+}
 }

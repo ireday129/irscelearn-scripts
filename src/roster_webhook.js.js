@@ -82,4 +82,15 @@ function onEdit(e) {
   } catch (err) {
     toast_('onEdit error: ' + err.message, true);
   }
+  /** Alias expected by sanity scan / menu */
+function triggerRosterValidWebhookMaybe() {
+  try {
+    if (typeof postWebhookOnRosterValidMaybe === 'function') {
+      return postWebhookOnRosterValidMaybe();
+    }
+    toast_('Webhook helper postWebhookOnRosterValidMaybe not found.', true);
+  } catch (e) {
+    toast_('Roster webhook error: ' + e.message, true);
+  }
+}
 }

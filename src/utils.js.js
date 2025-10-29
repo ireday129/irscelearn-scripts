@@ -161,4 +161,86 @@ if (typeof buildUnresolvedIssueIndex_ !== 'function') {
 
     return out;
   }
+  /** Minimal recheckMaster so the menu isn’t broken. */
+function recheckMaster() {
+  try {
+    const ss = SpreadsheetApp.getActive();
+    const master = mustGet_(ss, CFG.SHEET_MASTER);
+    const mVals = master.getDataRange().getValues();
+    if (mVals.length <= 1) { toast_('Master is empty.', true); return; }
+
+    const hdr = normalizeHeaderRow_(mVals[0]);
+    const mm  = mapHeaders_(hdr);
+    const rosterMap = getRosterMap_(ss); // ok if null
+    const ptinRe = /^P0\d{7}$/i;
+
+    const out = [];
+    for (let r = 1; r < mVals.length; r++) {
+      const row = mVals[r];
+      const first = String(row[mm.firstName] || '').trim();
+      const last  = String(row[mm.lastName]  || '').trim();
+      const ptin  = formatPtinP0_(row[mm.ptin] || '');
+      let status  = 'Good';
+
+      if (!ptin) status = 'Missing PTIN';
+      else if (!ptinRe.test(ptin) || ptin === 'P00000000') status = 'PTIN does not exist';
+
+      if (status === 'Good' && rosterMap && ptin) {
+        const ro = rosterMap.get(ptin);
+        if (ro && !namesMatchFull_(first, last, ro.first, ro.last)) status = 'PTIN & name do not match';
+      }
+      out.push([status === 'Good' ? '' : status]);
+    }
+
+    if (mm.masterIssueCol != null) {
+      master.getRange(2, mm.masterIssueCol + 1, out.length, 1).setValues(out);
+    }
+    toast_('Master rechecked.');
+  } catch (e) {
+    toast_('Recheck failed: ' + e.message, true);
+    Logger.log(e.stack || e);
+  }
+}
+/** ——— SANITY HELPERS (global, lightweight) ——— **/
+
+/** Clean header mapper (case-insensitive) */
+function mapCleanHeaders_(hdr) {
+  const lower = hdr.map(h => String(h || '').toLowerCase().trim().replace(/\s+/g, ' '));
+  const find = (label) => lower.indexOf(String(label || '').toLowerCase().trim().replace(/\s+/g, ' '));
+  return {
+    firstName:  find('attendee first name'),
+    lastName:   find('attendee last name'),
+    ptin:       find('attendee ptin'),
+    email:      find('email'),
+    program:    find('program number'),
+    hours:      find('ce hours awarded'),
+    completion: find('program completion date'),
+    issue:      find('reporting issue?')
+  };
+}
+
+/** Parse many date shapes into a Date (date-only) or null */
+function parseDate_(v) {
+  if (v == null) return null;
+  if (v instanceof Date) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!isNaN(n) && n > 20000) { // Excel serial
+    const base = new Date(1899, 11, 30);
+    const d = new Date(base.getTime() + n * 86400000);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+  const d2 = new Date(s);
+  return isNaN(d2.getTime()) ? null : new Date(d2.getFullYear(), d2.getMonth(), d2.getDate());
+}
+
+/** Format a date-ish thing to MM/dd/yyyy (string) */
+function formatToMDY_(v) {
+  if (v instanceof Date) {
+    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'MM/dd/yyyy');
+  }
+  const d = parseDate_(v);
+  return d ? Utilities.formatDate(d, Session.getScriptTimeZone(), 'MM/dd/yyyy') : '';
+}
 }

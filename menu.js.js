@@ -31,9 +31,91 @@ function onOpen() {
     .addSeparator()
     .addItem('Create/Repair Tabs (Clean & Issues only)', 'ensureAllTabs')
     .addSeparator()
-    .addItem('Diagnostics (Log all systems)', 'runDiagnostics');
-
+    .addItem('Diagnostics (Log all systems)', 'runDiagnostics')
+    .addSeparator()
+    .addItem('Sanity Scan: Helpers Present', 'sanityScanHelpers');
   menu.addToUi();
+}
+
+/**
+ * Sanity Scan: verifies required helpers and key sheets exist.
+ * Results go to Logs and a short toast shows counts.
+ */
+function sanityScanHelpers() {
+  const ss = SpreadsheetApp.getActive();
+
+  // ---- declare the helpers you expect to exist
+  const requiredHelpers = [
+    'toast_',
+    'mustGet_',
+    'normalizeHeaderRow_',
+    'mapHeaders_',
+    'mapCleanHeaders_',
+    'parseDate_',
+    'formatToMDY_',
+    'formatPtinP0_',
+    'normalizeProgram_',
+    'namesMatchFull_',
+    'normalizeCompletionForUpload_',
+    'writeCleanDataOnly_',
+    'buildUnresolvedIssueIndex_',
+
+    // workflow functions you call elsewhere (list only the ones you actually use)
+    'buildCleanUpload',
+    'recheckMaster',
+    'markCleanAsReported',
+    'updateProgramReportedTotals',
+    'syncMasterWithReportedHours',
+    'dedupeReportedHoursByPtinProgram',
+    'highlightRosterFromReportedHours',
+    'triggerRosterValidWebhookMaybe' // optional—remove if you renamed it
+  ];
+
+  // ---- key sheets you rely on (change these if your CFG is different)
+  const requiredSheets = [
+    (typeof CFG !== 'undefined' && CFG && CFG.SHEET_MASTER) || 'Master',
+    (typeof CFG !== 'undefined' && CFG && CFG.SHEET_CLEAN) || 'Clean',
+    (typeof CFG !== 'undefined' && CFG && CFG.SHEET_ROSTER) || 'Roster',
+    'Reported Hours',            // ledger you’re using for stats/highlighting
+    (typeof CFG !== 'undefined' && CFG && CFG.SHEET_SYS_ISSUES) || 'System Reporting Issues' // optional
+  ];
+
+  // ---- scan helpers
+  const missingHelpers = [];
+  const presentHelpers = [];
+  requiredHelpers.forEach(fn => {
+    const t = typeof globalThis[fn];
+    if (t === 'function') presentHelpers.push(fn);
+    else missingHelpers.push(fn);
+  });
+
+  // ---- scan sheets
+  const missingSheets = [];
+  const presentSheets = [];
+  requiredSheets.forEach(name => {
+    if (!name) return;
+    const sh = ss.getSheetByName(String(name));
+    if (sh) presentSheets.push(name);
+    else missingSheets.push(name);
+  });
+
+  // ---- log a pretty report
+  const lines = [];
+  lines.push('--- IRS CE Tools • Sanity Scan ---');
+  lines.push('Timestamp: ' + new Date());
+  lines.push('');
+  lines.push('Helpers present (' + presentHelpers.length + '): ' + (presentHelpers.length ? presentHelpers.join(', ') : '—'));
+  lines.push('Helpers MISSING (' + missingHelpers.length + '): ' + (missingHelpers.length ? missingHelpers.join(', ') : '—'));
+  lines.push('');
+  lines.push('Sheets present (' + presentSheets.length + '): ' + (presentSheets.length ? presentSheets.join(', ') : '—'));
+  lines.push('Sheets MISSING (' + missingSheets.length + '): ' + (missingSheets.length ? missingSheets.join(', ') : '—'));
+  Logger.log(lines.join('\n'));
+
+  // ---- quick toast summary
+  toast_(
+    'Sanity Scan complete • Helpers: ' + presentHelpers.length + ' ok, ' + missingHelpers.length + ' missing • Sheets: ' + presentSheets.length + ' ok, ' + missingSheets.length + ' missing',
+    (missingHelpers.length || missingSheets.length)
+  );
 }
 
 /** Optional unified diagnostic runner */
