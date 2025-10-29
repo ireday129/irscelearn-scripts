@@ -50,26 +50,58 @@ function syncGroupSheets(quiet) {
       if (!byGroup[gid]) byGroup[gid] = [];
       byGroup[gid].push(rec);
     }
-// inside syncGroupSheetsNightly(), before syncGroupSheets(true)
-dedupeMasterByEmailProgram(true);
-    // De-dupe per group by PTIN+Program (latest Reported At wins)
+    // De-dupe per group with fallbacks:
+    // Priority key: (1) PTIN+Program, (2) Email+Program, (3) Name+Program
+    // Winner = latest by (Reported At || Program Completion Date)
     Object.keys(byGroup).forEach(gid => {
       const arr = byGroup[gid];
       const pick = new Map();
-      for (let i=0;i<arr.length;i++){
-        const a = arr[i];
-        const key = (a.ptin||'') + '|' + (a.prog||'');
-        if (!a.ptin || !a.prog) continue;
-        if (!pick.has(key)) pick.set(key, i);
-        else {
-          const prev = arr[pick.get(key)];
-          const aDate = a.reportedAt instanceof Date ? a.reportedAt.getTime() : -1;
-          const pDate = prev.reportedAt instanceof Date ? prev.reportedAt.getTime() : -1;
-          if (aDate >= pDate) pick.set(key, i);
+
+      function bestTimestamp(rec) {
+        if (rec && rec.reportedAt instanceof Date) return rec.reportedAt.getTime();
+        // fallback to completion date (parsed if possible)
+        const c = rec && rec.comp ? parseDate_(rec.comp) : null;
+        return c instanceof Date ? c.getTime() : -1;
+      }
+
+      function makeKey(rec) {
+        const prog = rec.prog || '';
+        const ptin = rec.ptin || '';
+        const email = rec.email || '';
+        const first = (rec.first || '').trim().toLowerCase();
+        const last  = (rec.last  || '').trim().toLowerCase();
+
+        if (ptin && prog)  return `PTIN:${ptin}|${prog}`;
+        if (email && prog) return `EMAIL:${email}|${prog}`;
+        if (first && last && prog) return `NAME:${first} ${last}|${prog}`;
+        // no stable dedupe key; return empty string to indicate "keep as-is"
+        return '';
+      }
+
+      const out = [];
+      for (let i = 0; i < arr.length; i++) {
+        const rec = arr[i];
+        const key = makeKey(rec);
+
+        if (!key) {
+          // Cannot dedupe reliably; include this row as-is
+          out.push(rec);
+          continue;
+        }
+
+        if (!pick.has(key)) {
+          pick.set(key, i);
+        } else {
+          const prevIdx = pick.get(key);
+          const prev = arr[prevIdx];
+          if (bestTimestamp(rec) >= bestTimestamp(prev)) {
+            pick.set(key, i);
+          }
         }
       }
-      const out = [];
-      for (const [,idx] of pick) out.push(arr[idx]);
+
+      // keep winners + all non-deduped
+      for (const [, idx] of pick) out.push(arr[idx]);
       byGroup[gid] = out;
     });
 
