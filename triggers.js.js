@@ -161,7 +161,7 @@ function generateRosterFromMaster(quiet) {
       // Create a new Roster row array from Master data
       const masterRosterRow = Array(rosterMap.hdr.length).fill('');
       masterRosterRow[rosterMap.first] = first;
-      masterRosterRow[roosterMap.last] = last;
+      masterRosterRow[rosterMap.last] = last;
       masterRosterRow[rosterMap.ptin] = ptin; // Formatted PTIN
       masterRosterRow[rosterMap.email] = email; 
       masterRosterRow[rosterMap.group] = rosterGroupValue;
@@ -634,6 +634,14 @@ function backfillMasterSourceFromRoster_(quiet){
 /** onEdit: mark Roster Valid? TRUE pushes fixes to Master **/
 function onEdit(e){
   try {
+    handleRosterValidEdit_(e);
+  } catch (err) {
+    toast_('onEdit dispatcher error: ' + (err && err.message ? err.message : err), true);
+  }
+}
+
+function handleRosterValidEdit_(e){
+  try {
     if (!e || !e.range) return;
     const sh = e.range.getSheet();
     if (sh.getName() !== CFG.SHEET_ROSTER) return;
@@ -644,6 +652,8 @@ function onEdit(e){
     if (map.valid >= 0 && e.range.getRow() >= 2 && e.range.getColumn() === (map.valid + 1)) {
       const newVal = e.value;
       if (parseBool_(newVal)) {
+        // Immediately force the checkbox cell to stay checked in case other handlers race:
+        e.range.setValue(true);
         const r = e.range.getRow();
         const vals = sh.getRange(r, 1, 1, sh.getLastColumn()).getValues()[0];
 
@@ -676,6 +686,24 @@ function onEdit(e){
           master.getRange(2,1,body.length,mVals[0].length).setValues(body);
           toast_(`Roster → Master: cleared Reporting Issue & synced ${updated} row(s) for ${email}.`);
         }
+
+        // ✅ Clear row highlight when Valid? is TRUE
+        var cols = sh.getLastColumn();
+        var whites = [Array(cols).fill('#ffffff')];
+        sh.getRange(r, 1, 1, cols).setBackgrounds(whites);
+        SpreadsheetApp.flush();
+
+        // ✅ Fire webhook with attendee info
+        try {
+          postRosterValidWebhook_({
+            email: email,
+            first_name: first,
+            last_name: last
+          });
+        } catch (err) {
+          Logger.log('postRosterValidWebhook_ failed: ' + (err && err.message ? err.message : err));
+        }
+        Utilities.sleep(50);
       }
     }
   } catch (err) {
@@ -695,4 +723,30 @@ function formatPtinP0_(ptinRaw) {
     if (digits) v = 'P0' + digits.slice(-7).padStart(7,'0');
   }
   return v;
+}
+
+/**
+ * POST a webhook to WordPress when a Roster entry is marked Valid? = TRUE.
+ * Payload: { email, first_name, last_name }
+ */
+function postRosterValidWebhook_(payload) {
+  var url = 'https://irscelearn.com/wp-json/uap/v2/uap-5213-5214';
+  if (!payload || !payload.email) return;
+
+  var options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+    followRedirects: true
+  };
+
+  var res = UrlFetchApp.fetch(url, options);
+  var code = res.getResponseCode();
+  if (code >= 200 && code < 300) {
+    toast_('Roster Valid webhook sent for ' + payload.email + '.', false);
+  } else {
+    Logger.log('Webhook non-2xx (' + code + '): ' + (res && res.getContentText ? res.getContentText() : ''));
+    toast_('Webhook error (' + code + ') for ' + payload.email + '.', true);
+  }
 }
