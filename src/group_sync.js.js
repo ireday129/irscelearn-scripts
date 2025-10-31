@@ -286,12 +286,23 @@ function syncGroupSheetsStrict() {
 
       // 3) Auto-size columns + enforce sane formats
       try {
-        for (let c = 1; c <= lastCol; c++) targetSheet.autoResizeColumn(c);
+        // Turn off wrapping on header and data so widths reflect full titles/content
+        const dataLastRow = Math.max(out.length, 1);
+        targetSheet.getRange(1, 1, 1, lastCol).setWrap(false);
+        if (dataLastRow > 0) {
+          targetSheet.getRange(2, 1, dataLastRow, lastCol).setWrap(false);
+        }
+
+        // Auto-resize all columns (twice helps when formats update lengths)
+        for (let pass = 0; pass < 2; pass++) {
+          for (let c = 1; c <= lastCol; c++) targetSheet.autoResizeColumn(c);
+        }
+
         // Hours number format (CE Hours Awarded / CE Hours)
         let iHours = lower.indexOf('ce hours awarded');
         if (iHours < 0) iHours = lower.indexOf('ce hours');
         if (iHours >= 0) {
-          targetSheet.getRange(2, iHours+1, Math.max(out.length,1), 1).setNumberFormat('0.00');
+          targetSheet.getRange(2, iHours + 1, Math.max(out.length, 1), 1).setNumberFormat('0.00');
         }
       } catch (e) {
         Logger.log('Autosize/format failed (non-fatal): ' + e.message);
@@ -306,24 +317,35 @@ function syncGroupSheetsStrict() {
         Logger.log('Filter creation failed (non-fatal): ' + e.message);
       }
 
-      // 5) Conditional formatting: soft green when Reported? is TRUE
+      // 5) Conditional formatting: soft green when Reported? is TRUE (cell-only)
       try {
         const iReported = lower.indexOf('reported?');
         if (iReported >= 0) {
-          const dataRange  = targetSheet.getRange(2, 1, Math.max(out.length,1), lastCol);
+          const repRange = targetSheet.getRange(2, iReported+1, Math.max(out.length,1), 1);
           const colLetter  = colToA1_(iReported+1);
-          const startRow   = 2;
+          const startRow   = repRange.getRow();
           const greenRule  = SpreadsheetApp.newConditionalFormatRule()
             .whenFormulaSatisfied(`=$${colLetter}${startRow}=TRUE`)
             .setBackground('#E6F4EA')
-            .setRanges([dataRange])
+            .setRanges([repRange])
             .build();
-          const rules = targetSheet.getConditionalFormatRules() || [];
+
+          // Merge with any existing rules but avoid duplicating an identical rule on the same range
+          const rules = (targetSheet.getConditionalFormatRules() || []).filter(r => {
+            const rs = r.getRanges();
+            if (!rs || rs.length !== 1) return true;
+            const x = rs[0];
+            // filter out prior rules that target this exact checkbox range
+            return !(x.getRow() === repRange.getRow() &&
+                     x.getColumn() === repRange.getColumn() &&
+                     x.getNumRows() === repRange.getNumRows() &&
+                     x.getNumColumns() === repRange.getNumColumns());
+          });
           rules.push(greenRule);
           targetSheet.setConditionalFormatRules(rules);
         }
       } catch (e) {
-        Logger.log('Green CF failed (non-fatal): ' + e.message);
+        Logger.log('Green CF (cell-only) failed (non-fatal): ' + e.message);
       }
 
       // 6) Duplicate guard (same Attendee PTIN + Program Name) highlighted light red
@@ -359,30 +381,73 @@ function syncGroupSheetsStrict() {
         Logger.log('Email normalize failed (non-fatal): ' + e.message);
       }
 
-      // 8) “Last synced” note on the header’s last column cell
+      // 8) “Last synced” note on the header’s last column cell + visible toast
       try {
-        targetSheet.getRange(1, lastCol).setNote('Last synced: ' + new Date());
+        const lastSynced = new Date();
+        targetSheet.getRange(1, lastCol).setNote('Last synced: ' + lastSynced);
+        // Show a toast in the active UI (the user can close it)
+        try {
+          SpreadsheetApp.getActive().toast(
+            `${gName} synced at ${Utilities.formatDate(lastSynced, Session.getScriptTimeZone(), 'MMM d, yyyy h:mm a')}`,
+            'Group Sync',
+            7
+          );
+        } catch (uiErr) {
+          // non-fatal if script is not running in a visible UI
+          Logger.log('Toast failed (non-fatal): ' + uiErr.message);
+        }
       } catch (e) {
-        Logger.log('Last-synced note failed (non-fatal): ' + e.message);
+        Logger.log('Last-synced note/ toast failed (non-fatal): ' + e.message);
       }
 
-      // 10) Quick summary row (optional): total hours & count of issues
+      // 10) Quick summary block: totals + distinct attendee count
       try {
         let iHours2 = lower.indexOf('ce hours awarded');
         if (iHours2 < 0) iHours2 = lower.indexOf('ce hours');
         const iIssue2 = lower.indexOf('reporting issue?');
+        const iEmail2 = lower.indexOf('email');
+        const iPtin2  = lower.indexOf('attendee ptin');
+        const iFirst2 = lower.indexOf('attendee first name');
+        const iLast2  = lower.indexOf('attendee last name');
+
+        // Build a distinct-attendee set: prefer email, else PTIN, else "first last"
+        const keys = new Set();
+        for (let r = 0; r < out.length; r++) {
+          const emailVal = iEmail2 >= 0 ? String(out[r][iEmail2] || '').trim().toLowerCase() : '';
+          const ptinVal  = iPtin2  >= 0 ? String(out[r][iPtin2]  || '').trim().toUpperCase() : '';
+          const fVal     = iFirst2 >= 0 ? String(out[r][iFirst2] || '').trim().toLowerCase() : '';
+          const lVal     = iLast2  >= 0 ? String(out[r][iLast2]  || '').trim().toLowerCase() : '';
+          let k = emailVal || ptinVal || (fVal || '') + '|' + (lVal || '');
+          if (k.replace(/\|/g,'').length === 0) continue; // guard against all-empty
+          keys.add(k);
+        }
+
         const startSummary = Math.max(targetSheet.getLastRow() + 2, 4);
         targetSheet.getRange(startSummary, 1, 1, 2).setValues([['Summary','']]).setFontWeight('bold');
+
         if (iHours2 >= 0) {
           targetSheet.getRange(startSummary+1, 1).setValue('Total CE Hours:');
           targetSheet.getRange(startSummary+1, 2)
             .setFormula(`=SUM(${colToA1_(iHours2+1)}2:${colToA1_(iHours2+1)}${2+out.length-1})`);
         }
+
         if (iIssue2 >= 0) {
-          targetSheet.getRange(startSummary+2, 1).setValue('Rows with Issues:');
-          targetSheet.getRange(startSummary+2, 2)
-            .setFormula(`=COUNTIF(${colToA1_(iIssue2+1)}2:${colToA1_(iIssue2+1)}${2+out.length-1},"<>")`);
+          // Count distinct PTINs where Reporting Issue? is nonblank
+          const iPtin2Strict = lower.indexOf('attendee ptin');
+          let issuePtinKeys = new Set();
+          if (iPtin2Strict >= 0) {
+            for (let r = 0; r < out.length; r++) {
+              const issueVal = String(out[r][iIssue2] || '').trim();
+              const ptinVal  = String(out[r][iPtin2Strict] || '').trim().toUpperCase();
+              if (issueVal && ptinVal) issuePtinKeys.add(ptinVal);
+            }
+          }
+          targetSheet.getRange(startSummary + 2, 1).setValue('Students with Issues:');
+          targetSheet.getRange(startSummary + 2, 2).setValue(issuePtinKeys.size);
         }
+
+        targetSheet.getRange(startSummary+3, 1).setValue('Reported Students:');
+        targetSheet.getRange(startSummary+3, 2).setValue(keys.size);
       } catch (e) {
         Logger.log('Summary block failed (non-fatal): ' + e.message);
       }
