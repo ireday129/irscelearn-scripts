@@ -118,15 +118,25 @@ function syncGroupSheetsStrict() {
 
   groups.forEach(entry => {
     visited++;
-    const gName = String(entry.group || '').trim();
-    const gUrl  = String(entry.url   || '').trim();
+    const gName = String(entry.groupName || entry.group || '').trim();
+    const gUrl  = String(entry.url || '').trim();
+    const gId   = String(entry.groupId || '').trim();
     if (!gName || !gUrl) {
       Logger.log(`Group catalog entry missing name or url: ${JSON.stringify(entry)}`);
       return;
     }
 
-    // Filter Master rows for this group
-    const rows = mBody.filter(r => String(r[mm.group] || '').trim() === gName);
+    // Determine Master columns for group name / id
+    const iGroupName = (mm.group != null) ? mm.group : findHeaderIndex_(mHdr, 'Group Name');
+    const iGroupId   = findHeaderIndex_(mHdr, 'Group ID');
+
+    // Filter Master rows for this group (match by name, or by ID if both sides have IDs)
+    const rows = mBody.filter(r => {
+      const name = iGroupName >= 0 ? String(r[iGroupName] || '').trim() : '';
+      const id   = iGroupId   >= 0 ? String(r[iGroupId]   || '').trim() : '';
+      return (name && name === gName) || (gId && id && id === gId);
+    });
+
     if (!rows.length) {
       Logger.log(`Group "${gName}": no Master rows; skipping.`);
       return;
@@ -227,7 +237,7 @@ function syncGroupSheetsStrict() {
 
     totalSheets++;
     totalCells += out.length * lastCol;
-    Logger.log(`Group "${gName}": wrote ${out.length} row(s) to ${targetSS.getName()}.`);
+    Logger.log(`Group "${gName}" (${gId || 'no-id'}): wrote ${out.length} row(s) to ${targetSS.getName()}.`);
   });
 
   toast_(`Group sync done: visited ${visited}, wrote ${totalSheets} sheet(s), ~${totalCells} cells.`);
@@ -260,24 +270,44 @@ function loadCoursesMap_(ss) {
   return map;
 }
 
-/** Read "Groups" catalog: returns [{group, url}] */
+/** Read "Groups" or "Group Config" catalog: returns [{groupName, url, groupId}] */
 function readGroupsCatalog_(ss) {
-  const sh = ss.getSheetByName('Groups');
+  // Prefer "Group Config" (with headers: Group ID, Group Name, Spreadsheet URL)
+  let sh = ss.getSheetByName('Group Config');
+  if (!sh || sh.getLastRow() < 2) {
+    // Fallback to legacy "Groups" (headers: Group, Sheet URL)
+    sh = ss.getSheetByName('Groups');
+  }
   if (!sh || sh.getLastRow() < 2) return [];
+
   const vals = sh.getDataRange().getValues();
   const hdr  = normalizeHeaderRow_(vals[0]);
   const lower= hdr.map(h=>h.toLowerCase());
-  const iG = lower.indexOf('group');
-  const iU = lower.indexOf('sheet url');
-  if (iG < 0 || iU < 0) {
-    toast_('Groups catalog missing "Group" and/or "Sheet URL" headers.', true);
+
+  // Flexible header candidates
+  const idxOfAny = (names) => {
+    for (const n of names) {
+      const i = lower.indexOf(String(n).toLowerCase());
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+
+  const iId  = idxOfAny(['group id','id']);
+  const iNam = idxOfAny(['group name','group']);
+  const iUrl = idxOfAny(['spreadsheet url','sheet url','url']);
+
+  if (iNam < 0 || iUrl < 0) {
+    toast_('Group catalog missing "Group Name/Group" and/or "Spreadsheet URL/Sheet URL" headers.', true);
     return [];
   }
+
   const out = [];
-  for (let r=1;r<vals.length;r++){
-    const group = String(vals[r][iG]||'').trim();
-    const url   = String(vals[r][iU]||'').trim();
-    if (group && url) out.push({group, url});
+  for (let r = 1; r < vals.length; r++) {
+    const groupName = String(vals[r][iNam] || '').trim();
+    const url       = String(vals[r][iUrl] || '').trim();
+    const groupId   = iId >= 0 ? String(vals[r][iId] || '').trim() : '';
+    if (groupName && url) out.push({ groupName, url, groupId });
   }
   return out;
 }
