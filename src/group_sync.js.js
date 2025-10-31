@@ -126,15 +126,17 @@ function syncGroupSheetsStrict() {
       return;
     }
 
-    // Determine Master columns for group name / id
-    const iGroupName = (mm.group != null) ? mm.group : findHeaderIndex_(mHdr, 'Group Name');
-    const iGroupId   = findHeaderIndex_(mHdr, 'Group ID');
+    // Determine Master columns for group id / name.
+    // NOTE: In this workbook, "Group" is the *ID* the user belongs to.
+    // So we treat header "Group" as the ID column, and fall back to "Group ID".
+    const iGroupId   = (mm.group != null) ? mm.group : findHeaderIndex_(mHdr, 'Group ID');
+    const iGroupName = findHeaderIndex_(mHdr, 'Group Name');
 
-    // Filter Master rows for this group (match by name, or by ID if both sides have IDs)
+    // Filter Master rows for this group (prefer match by ID, fallback to name)
     const rows = mBody.filter(r => {
       const name = iGroupName >= 0 ? String(r[iGroupName] || '').trim() : '';
       const id   = iGroupId   >= 0 ? String(r[iGroupId]   || '').trim() : '';
-      return (name && name === gName) || (gId && id && id === gId);
+      return (gId && id && id === gId) || (name && name === gName);
     });
 
     if (!rows.length) {
