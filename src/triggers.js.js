@@ -711,14 +711,8 @@ function handleRosterValidEdit_(e){
           toast_(`Roster → Master: cleared Reporting Issue & synced ${updated} row(s) for ${email}.`);
         }
 
-        // ✅ Force the entire row to white immediately
-        var cols = sh.getLastColumn();
-        var rowRange = sh.getRange(r, 1, 1, cols);
-        rowRange.setBackground(null);
-        rowRange.setBackground('#ffffff');
-        SpreadsheetApp.flush();
-        // And pin it white by putting a high‑priority row CF rule first
-        forceRosterRowWhite_(sh, r);
+        // ✅ Force the entire row to white immediately (clear any manual fills)
+        resetRosterRowBackground_(sh, r);
 
         // ✅ Fire webhook once per contact (idempotent by email)
         try {
@@ -749,6 +743,89 @@ function handleRosterValidEdit_(e){
   } catch (err) {
     toast_('onEdit error: ' + err.message, true);
   }
+}
+
+/**
+ * Clears any direct fill on the row and applies a top‑priority white CF rule
+ * so later yellow rules cannot override this specific row.
+ */
+function resetRosterRowBackground_(sh, rowIndex) {
+  if (!sh || rowIndex < 2) return;
+  var cols = sh.getLastColumn();
+  var rowRange = sh.getRange(rowIndex, 1, 1, cols);
+  // Clear any direct fills (so we're not fighting ourselves)
+  rowRange.setBackground(null);
+  // Also set a direct white fill (visible immediately)
+  rowRange.setBackground('#ffffff');
+  SpreadsheetApp.flush();
+  // And pin with highest‑priority row‑scoped white CF rule
+  forceRosterRowWhite_(sh, rowIndex);
+}
+
+/**
+ * Prepends a row-scoped white conditional format rule for this row (overrides yellow).
+ * Also prunes older per‑row white rules to keep the rules list small.
+ */
+function forceRosterRowWhite_(sh, rowIndex) {
+  if (!sh || rowIndex < 2) return;
+  var cols = sh.getLastColumn();
+  var range = sh.getRange(rowIndex, 1, 1, cols);
+
+  // Build a high‑priority white rule for this row
+  var newRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=TRUE')
+    .setBackground('#ffffff')
+    .setRanges([range])
+    .build();
+
+  var rules = sh.getConditionalFormatRules() || [];
+
+  // Keep existing rules but remove older per‑row white rules for this exact row
+  var pruned = [];
+  for (var i = 0; i < rules.length; i++) {
+    var rule = rules[i];
+    var rs = rule.getRanges && rule.getRanges();
+    if (!rs || !rs.length) { pruned.push(rule); continue; }
+    // If the rule exactly targets this row across all columns and is a white background, drop it
+    var r0 = rs[0];
+    var sameRow = (rs.length === 1 && r0.getRow() === rowIndex && r0.getNumRows() === 1 && r0.getColumn() === 1 && r0.getNumColumns() === cols);
+    var isWhite;
+    try {
+      isWhite = rule.copy().build().getBackground() === '#ffffff';
+    } catch (e) {
+      isWhite = false;
+    }
+    if (!(sameRow && isWhite)) pruned.push(rule);
+  }
+
+  // Prepend our white rule so it has highest priority
+  pruned.unshift(newRule);
+
+  // Optional: limit per‑row white rules overall to avoid bloat (keep newest ~50)
+  var count = 0;
+  var filtered = [];
+  for (var j = 0; j < pruned.length; j++) {
+    var r = pruned[j];
+    var rs2 = r.getRanges && r.getRanges();
+    var isRowWhite = false;
+    if (rs2 && rs2.length === 1) {
+      var rr = rs2[0];
+      if (rr.getNumRows() === 1 && rr.getColumn() === 1 && rr.getNumColumns() === cols) {
+        try {
+          isRowWhite = r.copy().build().getBackground() === '#ffffff';
+        } catch (e2) { isRowWhite = false; }
+      }
+    }
+    if (isRowWhite) {
+      if (count < 50) { filtered.push(r); count++; }
+      // else drop older extras
+    } else {
+      filtered.push(r);
+    }
+  }
+
+  sh.setConditionalFormatRules(filtered);
+  SpreadsheetApp.flush();
 }
 
 /** Utility: Normalize PTIN format to P0####### uppercase (idempotent). */
@@ -792,38 +869,4 @@ function postRosterValidWebhook_(payload) {
     toast_('Webhook error (' + code + ') for ' + payload.email + '.', true);
     return false;
   }
-}
-
-/**
- * Prepends a row-scoped white conditional format rule for this row (overrides yellow).
- * Removes any prior per-row white rules for this row to avoid rule bloat.
- */
-function forceRosterRowWhite_(sh, rowIndex) {
-  if (!sh || rowIndex < 2) return;
-  var cols = sh.getLastColumn();
-  var range = sh.getRange(rowIndex, 1, 1, cols);
-  // Build a high‑priority white rule for this row
-  var newRule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=TRUE')
-    .setBackground('#ffffff')
-    .setRanges([range])
-    .build();
-
-  var rules = sh.getConditionalFormatRules() || [];
-  // Drop any existing row-scoped white rules we previously added for this row
-  rules = rules.filter(function(rule) {
-    var rs = rule.getRanges && rule.getRanges();
-    if (!rs || !rs.length) return true;
-    // keep rules that don't exactly match this row range
-    return !(rs.length === 1 &&
-             rs[0].getRow() === rowIndex &&
-             rs[0].getNumRows() === 1 &&
-             rs[0].getColumn() === 1 &&
-             rs[0].getNumColumns() === cols &&
-             rule.copy().build().getBackground() === '#ffffff');
-  });
-  // Prepend our white rule so it has highest priority
-  rules.unshift(newRule);
-  sh.setConditionalFormatRules(rules);
-  SpreadsheetApp.flush();
 }
