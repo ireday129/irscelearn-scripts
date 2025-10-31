@@ -67,3 +67,16 @@ function syncGroupSheets() {
     Logger.log(err && err.stack ? err.stack : err);
   }
 }
+
+/** Alias used by menus that reference syncGroupSheetsMenu */
+function syncGroupSheetsMenu() {
+  return syncGroupSheets();
+}
+
+/** Ensure global exports in Apps Script runtime (defensive) */
+try {
+  this.syncGroupSheets = this.syncGroupSheets || syncGroupSheets;
+  this.syncGroupSheetsMenu = this.syncGroupSheetsMenu || syncGroupSheetsMenu;
+} catch (e) {
+  // no-op: some runtimes may not allow assigning to `this`
+}
