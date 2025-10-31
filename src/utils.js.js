@@ -345,3 +345,15 @@ function formatToMDY_(v) {
   const d = parseDate_(v);
   return d ? Utilities.formatDate(d, Session.getScriptTimeZone(), 'MM/dd/yyyy') : '';
 }
+/** ============================================================
+ * truthy_()
+ * A safer, universal truthiness parser for checkboxes, TRUE/FALSE,
+ * "Yes"/"No", "Y"/"N", 1/0, etc.
+ * ============================================================ */
+function truthy_(val) {
+  if (val === true) return true;
+  if (val === false) return false;
+  if (val == null) return false;
+  const s = String(val).trim().toLowerCase();
+  return ['true', 'yes', 'y', '1', 'checked', 'x'].includes(s);
+}
