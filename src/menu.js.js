@@ -42,7 +42,7 @@ function onOpen(e) {
     .addItem('Sync Reported Hours -> Master', 'syncReportedToMasterMenu')
     .addSeparator()
     .addItem('Deduplicate Roster by Email', 'dedupeRosterByEmail')
-    .addItem('Backfill Master from Roster', 'backfillMasterFromRosterCombined')
+    .addItem('Backfill Roster from Master (Reported only)', 'backfillRosterFromMasterReported_')
     .addItem('Update Roster Validity from Issues', 'updateRosterValidityFromIssues_')
     .addSeparator()
     .addItem('Create/Repair Tabs (Clean & Issues only)', 'ensureAllTabs')

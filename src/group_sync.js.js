@@ -23,6 +23,8 @@ function syncGroupSheets(quiet) {
     }
     // END FIX
 
+    const courseNameByNumber = readCoursesProgramMap_();
+
     const need = ['firstName','lastName','ptin','email','program','hours','completion','group','reportedCol','reportedAtCol','masterIssueCol'];
     const missing = need.filter(k => mMap[k] == null);
     if (missing.length) { if (!quiet) toast_('Master missing columns for Group sync: ' + missing.join(', '), true); return; }
@@ -40,6 +42,7 @@ function syncGroupSheets(quiet) {
         last:  String(row[mMap.lastName]||'').trim(),
         ptin:  formatPtinP0_(row[mMap.ptin]||''),
         prog:  String(row[mMap.program]||'').toUpperCase().replace(/\s+/g,'').trim(),
+        progName: null,
         hours: row[mMap.hours],
         email: String(row[mMap.email]||'').toLowerCase().trim(),
         comp:  formatToMDY_(row[mMap.completion]),
@@ -47,6 +50,7 @@ function syncGroupSheets(quiet) {
         reported: parseBool_(row[mMap.reportedCol]) ? true : false,
         reportedAt: row[mMap.reportedAtCol] instanceof Date ? row[mMap.reportedAtCol] : ''
       };
+      rec.progName = courseNameByNumber.get(rec.prog) || rec.prog;
       if (!byGroup[gid]) byGroup[gid] = [];
       byGroup[gid].push(rec);
     }
@@ -136,7 +140,8 @@ function syncGroupSheets(quiet) {
         if (map.first>=0) arr[map.first] = o.first;
         if (map.last>=0)  arr[map.last]  = o.last;
         if (map.ptin>=0)  arr[map.ptin]  = o.ptin;
-        if (map.prog>=0)  arr[map.prog]  = o.prog;
+        if (map.progName>=0) arr[map.progName] = o.progName || o.prog;
+        else if (map.prog>=0)  arr[map.prog]  = o.progName || o.prog;
         if (map.hours>=0) arr[map.hours] = o.hours;
         if (map.email>=0) arr[map.email] = o.email;
         if (map.comp>=0)  arr[map.comp]  = o.comp;
@@ -225,6 +230,7 @@ function mapGroupHeadersFlexible_(sheet){
     last:      idxOfAny(['Attendee Last Name']),
     ptin:      idxOfAny(['attendee PTIN','Attendee PTIN','PTIN']),
     prog:      idxOfAny(['Program Number']),
+    progName:  idxOfAny(['Program Name']),
     hours:     idxOfAny(['CE hours Awards','CE Hours Awards','CE hours Awarded','CE Hours Awarded']),
     email:     idxOfAny(['email','Email']),
     comp:      idxOfAny(['program completion date','Program Completion Date']),
@@ -244,4 +250,24 @@ function setCheckboxValidation_(range) {
       .setAllowInvalid(false) // Must be true/false only
       .build();
   range.setDataValidation(rule);
+}
+
+function readCoursesProgramMap_() {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName('Courses');
+  const map = new Map();
+  if (!sh || sh.getLastRow() < 2) return map;
+
+  const vals = sh.getDataRange().getValues();
+  const hdr = vals[0].map(s => String(s || '').trim().toLowerCase());
+  const iNum = hdr.indexOf('program number');
+  const iName = hdr.indexOf('program name');
+  if (iNum < 0 || iName < 0) return map;
+
+  for (let r = 1; r < vals.length; r++) {
+    const num = String(vals[r][iNum] || '').toUpperCase().replace(/\s+/g, '').trim();
+    const name = String(vals[r][iName] || '').trim();
+    if (num && name) map.set(num, name);
+  }
+  return map;
 }
