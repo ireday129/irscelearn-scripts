@@ -43,6 +43,8 @@ function highlightRosterFromReportedHours(quiet) {
     const emailToMaster = new Map(); // email -> { ptin, email, first, last, reported }
     const nameToMaster  = new Map(); // "first last" -> same
     const ptinToEmail   = new Map(); // ptin -> email (for backfilling email)
+    const reportedEmails = new Set();   // email with ANY reported row
+    const reportedNames  = new Set();   // "first last" with ANY reported row
 
     const mBody = mVals.slice(1);
     for (let i = 0; i < mBody.length; i++) {
@@ -55,9 +57,11 @@ function highlightRosterFromReportedHours(quiet) {
       const last  = mm.lastName  != null ? String(row[mm.lastName]  || '').trim() : '';
       const nkey  = _nameKey(first, last);
 
-      if (ptin) {
-        ptinToEmail.set(ptin, email);
-        if (reported) reportedPtins.add(ptin);
+      if (ptin) ptinToEmail.set(ptin, email);
+      if (reported) {
+        if (ptin)  reportedPtins.add(ptin);
+        if (email) reportedEmails.add(email);
+        if (nkey)  reportedNames.add(nkey);
       }
       if (email) emailToMaster.set(email, { ptin, email, first, last, reported });
       if (nkey)  nameToMaster.set(nkey, { ptin, email, first, last, reported });
@@ -130,9 +134,15 @@ function highlightRosterFromReportedHours(quiet) {
         }
       }
 
+      const nkeyR = _nameKey(rFirst, rLast);
+      const hasReportedMatch =
+        (rPtin && reportedPtins.has(rPtin)) ||
+        (rEmail && reportedEmails.has(rEmail)) ||
+        (nkeyR && reportedNames.has(nkeyR));
+
       // --- Decide highlight color
       let rowColor = DEFAULT;
-      if (!rValid && rPtin && reportedPtins.has(rPtin)) {
+      if (!rValid && hasReportedMatch) {
         rowColor = YELLOW;
       }
 
