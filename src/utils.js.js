@@ -211,7 +211,6 @@ if (typeof buildUnresolvedIssueIndex_ !== 'function') {
   }
 }
 // Close the if wrapper for buildUnresolvedIssueIndex_ here
-}
 
 if (typeof mapHeaders_ !== 'function') {
   /**
