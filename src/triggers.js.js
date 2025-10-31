@@ -1,25 +1,6 @@
 /* global SpreadsheetApp, CFG, toast_, mapRosterHeaders_, parseBool_ */
-/* global postRosterValidWebhook_, highlightRosterFromReportedHours, PropertiesService */
 
-/**
- * INSTALLABLE on-edit entrypoint.
- * Create once in Apps Script: Triggers ➜ Add Trigger ➜ Function: onEditInstallable
- * Source: From spreadsheet, Event type: On edit
- * Needed so UrlFetchApp (webhooks) can run.
- */
-function onEditInstallable(e) {
-  try {
-    if (!e || !e.range) return;
-    const sh = e.range.getSheet();
-    const rosterName = String(CFG.SHEET_ROSTER || 'Roster').trim().toLowerCase();
-    if (sh.getName().trim().toLowerCase() !== rosterName) return;
 
-    // Reuse the same handler as simple onEdit
-    handleRosterValidEdit_(e);
-  } catch (err) {
-    Logger.log('onEditInstallable error: ' + (err.stack || err.message));
-  }
-}
 
 /** ROSTER HELPERS + onEdit (override-style dedupe, supports Group) **/
 
@@ -713,31 +694,6 @@ function handleRosterValidEdit_(e){
 
         // ✅ Force the entire row to white immediately (clear any manual fills)
         resetRosterRowBackground_(sh, r);
-
-        // ✅ Fire webhook once per contact (idempotent by email)
-        try {
-          var props = PropertiesService.getScriptProperties();
-          var key = 'roster_webhook:' + email;
-          var already = props.getProperty(key);
-          if (!already) {
-            var ok = postRosterValidWebhook_({
-              email: email,
-              first_name: first,
-              last_name: last
-            });
-            if (ok) {
-              props.setProperty(key, String(new Date().getTime()));
-              toast_('Webhook recorded for ' + email + '.', false);
-            } else {
-              Logger.log('Webhook failed (non-2xx), will allow retry on next Valid? action for ' + email);
-            }
-          } else {
-            Logger.log('Webhook already sent for ' + email + ' (skip)');
-          }
-        } catch (err) {
-          Logger.log('postRosterValidWebhook_ failed: ' + (err && err.message ? err.message : err));
-        }
-        Utilities.sleep(50);
       }
     }
   } catch (err) {
@@ -842,31 +798,3 @@ function formatPtinP0_(ptinRaw) {
   return v;
 }
 
-/**
- * POST a webhook to WordPress when a Roster entry is marked Valid? = TRUE.
- * Payload: { email, first_name, last_name }
- * Returns boolean: true if webhook succeeded (2xx), false otherwise.
- */
-function postRosterValidWebhook_(payload) {
-  var url = 'https://irscelearn.com/wp-json/uap/v2/uap-5213-5214';
-  if (!payload || !payload.email) return false;
-
-  var options = {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
-    followRedirects: true
-  };
-
-  var res = UrlFetchApp.fetch(url, options);
-  var code = res.getResponseCode();
-  if (code >= 200 && code < 300) {
-    toast_('Roster Valid webhook sent for ' + payload.email + '.', false);
-    return true;
-  } else {
-    Logger.log('Webhook non-2xx (' + code + '): ' + (res && res.getContentText ? res.getContentText() : ''));
-    toast_('Webhook error (' + code + ') for ' + payload.email + '.', true);
-    return false;
-  }
-}
