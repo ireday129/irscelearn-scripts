@@ -171,3 +171,15 @@ function highlightRosterFromReportedHours() {
     `${valueChanges ? 'filled some blanks from Master.' : 'no backfill needed.'}`
   );
 }
+/**
+ * Menu shim so the menu item "Highlight Roster from Reported Hours"
+ * can call a stable global name.
+ */
+function highlightRosterFromReportedHoursMenu() {
+  try {
+    highlightRosterFromReportedHours();
+  } catch (e) {
+    try { toast_('Highlight failed: ' + (e && e.message ? e.message : e), true); } catch (_) {}
+    throw e;
+  }
+}
