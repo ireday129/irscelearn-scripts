@@ -1,160 +1,173 @@
-/**
- * Highlight Roster rows (entire row) for anyone who has ANY row marked Reported?=TRUE in "Master".
- * Matching precedence: EMAIL → PTIN → "first last".
- * - Uses a soft yellow highlight for the whole row.
- * - If Roster.Valid? is TRUE for that row, clear the highlight (white).
- * - Optionally backfills missing EMAIL/PTIN on the Roster from Master where columns exist.
- * - Designed to be robust even if PTIN is missing on Roster.
- *
- * Menu entry helper: highlightRosterFromReportedHoursMenu()
+/** roster_highlight.js
+ * Highlight Roster rows yellow if that attendee has ANY Reported?=TRUE on Master.
+ * - Match by Email (case-insensitive) OR PTIN (normalized P0#######).
+ * - If Roster.Valid? is checked/TRUE, force background WHITE (no highlight).
+ * - Non-destructive backfill: if Roster email/PTIN is blank and Master has it, fill it.
+ * - Requires utils helpers if available; includes light fallbacks.
  */
 
-// Local truthiness helper: uses global truthy_ if present, else a safe fallback.
-function _asTrue(val) {
-  try {
-    if (typeof truthy_ === 'function') return truthy_(val);
-  } catch (e) {}
-  if (typeof val === 'boolean') return val === true;
-  const s = String(val == null ? '' : val).trim().toLowerCase();
-  return s === 'true' || s === 'yes' || s === 'y' || s === '1' || s === '✓' || s === '✔';
-}
-
-// Build a normalized "first last" key
-function _nameKey(first, last) {
-  const f = String(first || '').trim().toLowerCase();
-  const l = String(last  || '').trim().toLowerCase();
-  return f && l ? (f + ' ' + l) : '';
-}
-
-function highlightRosterFromReportedHours(quiet) {
+function highlightRosterFromReportedHours() {
   const ss = SpreadsheetApp.getActive();
-  const roster = mustGet_(ss, CFG.SHEET_ROSTER);
   const master = mustGet_(ss, CFG.SHEET_MASTER);
+  const roster = mustGet_(ss, CFG.SHEET_ROSTER);
 
-  // --- Load Master and build indices ---
+  // ---- Helpers / fallbacks ----
+  const truthy = (typeof truthy_ === 'function')
+    ? truthy_
+    : (v => {
+        if (typeof v === 'boolean') return v;
+        if (v == null) return false;
+        const s = String(v).trim().toLowerCase();
+        return s === 'true' || s === 'yes' || s === 'y' || s === '1' || s === '✓';
+      });
+
+  const normEmail = e => String(e || '').trim().toLowerCase();
+  const normPtin  = v => (typeof formatPtinP0_ === 'function')
+    ? formatPtinP0_(v || '')
+    : String(v || '').toUpperCase().replace(/[^0-9P]/g, '').replace(/^P(?!0)/, 'P0');
+
+  const normHeaders = arr => (typeof normalizeHeaderRow_ === 'function')
+    ? normalizeHeaderRow_(arr)
+    : arr.map(v => String(v || '').trim().replace(/\s+/g, ' '));
+
+  const mapMaster = hdr => (typeof mapHeaders_ === 'function')
+    ? mapHeaders_(hdr)
+    : (() => {
+        const lower = hdr.map(h => String(h || '').toLowerCase().trim());
+        const find = label => lower.indexOf(String(label || '').toLowerCase().trim());
+        return {
+          firstName: find('attendee first name'),
+          lastName:  find('attendee last name'),
+          ptin:      find('ptin'),
+          email:     find('email'),
+          program:   find('program number'),
+          hours:     find('ce hours'),
+          completion:find('program completion date'),
+          masterIssueCol: find('reporting issue?'),
+          reportedCol:    find('reported?'),
+          reportedAtCol:  find('date reported')
+        };
+      })();
+
+  const mapRoster = sh => {
+    if (typeof mapRosterHeaders_ === 'function') return mapRosterHeaders_(sh);
+    const hdr = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(s => String(s || '').trim());
+    const lower = hdr.map(h => h.toLowerCase());
+    const find = (names) => {
+      for (const n of (Array.isArray(names) ? names : [names])) {
+        const i = lower.indexOf(String(n).toLowerCase());
+        if (i >= 0) return i;
+      }
+      return -1;
+    };
+    return {
+      first: find(['attendee first name','first name']),
+      last:  find(['attendee last name','last name']),
+      ptin:  find(['attendee ptin','ptin']),
+      email: find(['email','e-mail']),
+      valid: find(['valid?','valid']),
+      group: find(['group']),
+      hdr
+    };
+  };
+
+  // ---- Build reported sets & backfill maps from MASTER ----
   const mVals = master.getDataRange().getValues();
-  if (mVals.length <= 1) { if (!quiet) toast_('Master is empty; nothing to highlight.'); return; }
+  if (mVals.length <= 1) { toast_('Master is empty; nothing to highlight.', true); return; }
 
-  const mHdr = normalizeHeaderRow_(mVals[0]);
-  const mm   = mapHeaders_(mHdr);
-
-  if (mm.reportedCol == null) {
-    if (!quiet) toast_('Master missing "Reported?" column mapping in CFG.COL_HEADERS.reportedCol.', true);
-    return;
-  }
-  if (mm.email == null && mm.ptin == null && (mm.firstName == null || mm.lastName == null)) {
-    if (!quiet) toast_('Master missing Email/PTIN/Name columns needed for matching.', true);
+  const mHdr = normHeaders(mVals[0]);
+  const mm   = mapMaster(mHdr);
+  if (mm.reportedCol == null || (mm.email == null && mm.ptin == null)) {
+    toast_('Master is missing Reported? and/or key columns (Email/PTIN).', true);
     return;
   }
 
-  const reportedEmails = new Set();    // emails that have ANY reported row
-  const reportedPtins  = new Set();    // ptins that have ANY reported row
-  const reportedNames  = new Set();    // "first last" that have ANY reported row
+  const reportedEmails = new Set();  // lowercased
+  const reportedPtins  = new Set();  // normalized
+  const emailToPtin    = new Map();  // for Roster backfill
+  const ptinToEmail    = new Map();  // for Roster backfill
 
-  const emailToSnapshot = new Map();   // email -> { ptin, first, last }
-  const ptinToEmail     = new Map();   // ptin  -> email (best-guess backfill)
-  const nameToEmail     = new Map();   // "first last" -> email (best-guess backfill)
+  for (let r = 1; r < mVals.length; r++) {
+    const row = mVals[r];
+    const isReported = truthy(row[mm.reportedCol]);
+    const em = (mm.email != null) ? normEmail(row[mm.email]) : '';
+    const pt = (mm.ptin  != null) ? normPtin(row[mm.ptin])   : '';
 
-  const mBody = mVals.slice(1);
-  for (let i = 0; i < mBody.length; i++) {
-    const row = mBody[i];
-    const email = mm.email != null ? String(row[mm.email] || '').toLowerCase().trim() : '';
-    const ptin  = mm.ptin  != null ? formatPtinP0_(row[mm.ptin] || '') : '';
-    const first = mm.firstName != null ? String(row[mm.firstName] || '').trim() : '';
-    const last  = mm.lastName  != null ? String(row[mm.lastName]  || '').trim() : '';
-    const reported = _asTrue(row[mm.reportedCol]);
-    const nkey = _nameKey(first, last);
+    // Build cross maps for backfill even if not reported
+    if (em && pt && !ptinToEmail.has(pt)) ptinToEmail.set(pt, em);
+    if (em && pt && !emailToPtin.has(em)) emailToPtin.set(em, pt);
 
-    if (ptin && email) ptinToEmail.set(ptin, email);
-    if (nkey && email) nameToEmail.set(nkey, email);
-    if (email && !emailToSnapshot.has(email)) emailToSnapshot.set(email, { ptin, first, last });
-
-    if (reported) {
-      if (email) reportedEmails.add(email);
-      if (ptin)  reportedPtins.add(ptin);
-      if (nkey)  reportedNames.add(nkey);
-    }
+    if (!isReported) continue;
+    if (em) reportedEmails.add(em);
+    if (pt) reportedPtins.add(pt);
   }
 
-  // --- Map Roster headers (PTIN is OPTIONAL) ---
-  const rMap = mapRosterHeaders_(roster);
-  if (!rMap) { if (!quiet) toast_('Roster header mapping failed.', true); return; }
+  // ---- Process ROSTER rows ----
+  const rVals = roster.getDataRange().getValues();
+  if (rVals.length <= 1) { toast_('Roster is empty.', true); return; }
 
-  const lastRow = roster.getLastRow();
-  const lastCol = roster.getLastColumn();
-  if (lastRow < 2) { if (!quiet) toast_('Roster has no data to highlight.'); return; }
+  const rMap  = mapRoster(roster);
+  const iF = rMap.first, iL = rMap.last, iP = rMap.ptin, iE = rMap.email, iV = rMap.valid;
 
-  const dataRange = roster.getRange(2, 1, lastRow - 1, lastCol);
-  const vals   = dataRange.getValues();
-  const colors = dataRange.getBackgrounds();
+  if ([iF, iL].some(i => i < 0) || (iE < 0 && iP < 0)) {
+    toast_('Roster missing First/Last and Email/PTIN columns.', true);
+    return;
+  }
 
-  const YELLOW  = '#fff59d';
-  const WHITE   = '#ffffff';
+  const body      = rVals.slice(1);
+  const height    = body.length;
+  const width     = rVals[0].length;
+  const startRow  = 2;
+  const startCol  = 1;
 
-  let wroteBack = false;
-  let matches = 0;
+  // Prepare backgrounds array (rows x cols)
+  const bgRange  = roster.getRange(startRow, startCol, height, width);
+  const bgs      = bgRange.getBackgrounds();
+  let valueChanges = 0, bgChanges = 0;
 
-  for (let r = 0; r < vals.length; r++) {
-    const row = vals[r];
+  for (let r = 0; r < body.length; r++) {
+    const row = body[r];
 
-    // Pull current values (guard missing columns)
-    const rFirst = (typeof rMap.first === 'number' && rMap.first >= 0) ? row[rMap.first] : '';
-    const rLast  = (typeof rMap.last  === 'number' && rMap.last  >= 0) ? row[rMap.last]  : '';
-    let   rEmail = (typeof rMap.email === 'number' && rMap.email >= 0) ? String(row[rMap.email] || '').toLowerCase().trim() : '';
-    let   rPtin  = (typeof rMap.ptin  === 'number' && rMap.ptin  >= 0) ? formatPtinP0_(row[rMap.ptin] || '') : '';
-    const rValid = (typeof rMap.valid === 'number' && rMap.valid >= 0) ? _asTrue(row[rMap.valid]) : false;
+    // Current keys
+    let em = (iE >= 0) ? normEmail(row[iE]) : '';
+    let pt = (iP >= 0) ? normPtin(row[iP])  : '';
 
-    // --- Backfill EMAIL/PTIN if missing using Master lookups (optional) ---
-    if (!rEmail) {
-      if (rPtin && ptinToEmail.has(rPtin)) {
-        rEmail = ptinToEmail.get(rPtin);
-      } else {
-        const nk = _nameKey(rFirst, rLast);
-        if (nk && nameToEmail.has(nk)) rEmail = nameToEmail.get(nk);
-      }
-      if (rEmail && typeof rMap.email === 'number' && rMap.email >= 0) {
-        row[rMap.email] = rEmail;
-        wroteBack = true;
-      }
+    // Gentle backfill from Master maps when blank
+    if (!em && pt && ptinToEmail.has(pt)) {
+      em = ptinToEmail.get(pt);
+      if (iE >= 0) { row[iE] = em; valueChanges++; }
     }
-    if (!rPtin && rEmail && emailToSnapshot.has(rEmail)) {
-      const snap = emailToSnapshot.get(rEmail);
-      if (snap.ptin && typeof rMap.ptin === 'number' && rMap.ptin >= 0) {
-        rPtin = snap.ptin;
-        row[rMap.ptin] = rPtin;
-        wroteBack = true;
-      }
+    if (!pt && em && emailToPtin.has(em)) {
+      pt = emailToPtin.get(em);
+      if (iP >= 0) { row[iP] = pt; valueChanges++; }
     }
 
-    // Match precedence: EMAIL -> PTIN -> NAME
-    const nkeyR = _nameKey(rFirst, rLast);
-    const hasReportedMatch =
-      (!!rEmail && reportedEmails.has(rEmail)) ||
-      (!!rPtin  && reportedPtins.has(rPtin))   ||
-      (!!nkeyR  && reportedNames.has(nkeyR));
+    // Evaluate state
+    const isValid = (iV >= 0) ? truthy(row[iV]) : false;
+    const hasReported = (!!em && reportedEmails.has(em)) || (!!pt && reportedPtins.has(pt));
 
-    // Decide highlight color
-    const rowColor = (!rValid && hasReportedMatch) ? YELLOW : WHITE;
-    if (!rValid && hasReportedMatch) matches++;
+    // Decide background color
+    const want = isValid ? '#ffffff' : (hasReported ? '#fff8b1' : '#ffffff');
 
-    // Paint entire row
-    colors[r] = new Array(lastCol).fill(rowColor);
+    // Apply background across the entire row (visual clarity)
+    for (let c = 0; c < width; c++) {
+      if (bgs[r][c] !== want) {
+        bgs[r][c] = want;
+        bgChanges++;
+      }
+    }
   }
 
-  if (wroteBack) dataRange.setValues(vals);
-  dataRange.setBackgrounds(colors);
-
-  if (!quiet) {
-    toast_(`Roster highlighting updated from Master. Matches: ${matches}`);
+  // Write updates (values first, then backgrounds)
+  if (valueChanges) {
+    roster.getRange(startRow, startCol, height, width).setValues(body);
   }
-}
-
-function highlightRosterFromReportedHoursMenu() {
-  try {
-    highlightRosterFromReportedHours(true);
-    toast_('Roster highlighting updated from Master.Reported?');
-  } catch (e) {
-    toast_('Failed to update roster highlighting: ' + e.message, true);
-    Logger.log(e.stack || e);
+  if (bgChanges) {
+    bgRange.setBackgrounds(bgs);
   }
+
+  toast_(
+    `Roster highlight complete: ${bgChanges ? 'backgrounds updated' : 'no highlight changes'}; ` +
+    `${valueChanges ? 'filled some blanks from Master.' : 'no backfill needed.'}`
+  );
 }
