@@ -11,7 +11,7 @@ function mapGroupHeadersFlexible_(sheet){
     return -1;
   }
 
-  // Flexible aliases (case-insensitive) — broadened to avoid false "header mismatch"
+  // Flexible aliases (case-insensitive)
   const map = {
     first:     idxOfAny(['attendee first name','first name','fname']),
     last:      idxOfAny(['attendee last name','last name','lname']),
@@ -26,34 +26,31 @@ function mapGroupHeadersFlexible_(sheet){
     reportedAt:idxOfAny(['reported at','date reported'])
   };
 
-  // Determine if the sheet has enough to work with:
+  // Sheet must have: First+Last, (PTIN or Email), and (Program Name or Program Number)
   const haveIdentity = (map.first >= 0 && map.last >= 0);
-  const haveKey      = (map.ptin >= 0 || map.email >= 0);          // allow either PTIN or Email as the match key
-  const haveProgram  = (map.progName >= 0 || map.prog >= 0);       // allow Program Name OR Program Number
+  const haveKey      = (map.ptin >= 0 || map.email >= 0);
+  const haveProgram  = (map.progName >= 0 || map.prog >= 0);
 
-  const requiredMissing = [];
+  const missing = [];
   if (!haveIdentity) {
-    if (map.first < 0) requiredMissing.push('Attendee First Name');
-    if (map.last  < 0) requiredMissing.push('Attendee Last Name');
+    if (map.first < 0) missing.push('Attendee First Name');
+    if (map.last  < 0) missing.push('Attendee Last Name');
   }
-  if (!haveKey) requiredMissing.push('Attendee PTIN or Email');
-  if (!haveProgram) requiredMissing.push('Program Name or Program Number');
+  if (!haveKey) missing.push('Attendee PTIN or Email');
+  if (!haveProgram) missing.push('Program Name or Program Number');
 
-  const ok = requiredMissing.length === 0;
-
-  return { ok, missing: requiredMissing, ...map };
+  return { ok: missing.length===0, missing, ...map };
 }
+
 /** Public entrypoint for the menu item: “Sync Group Sheets (strict)” */
 function syncGroupSheets() {
   try {
-    // Prefer a strict/primary implementation if present
     if (typeof syncGroupSheetsStrict === 'function') return syncGroupSheetsStrict();
     if (typeof doGroupSyncAll_ === 'function')       return doGroupSyncAll_();
     if (typeof runGroupSync === 'function')          return runGroupSync();
     if (typeof groupSyncMain === 'function')         return groupSyncMain();
     if (typeof syncGroupsFlexible === 'function')    return syncGroupsFlexible();
 
-    // Fallback: helpful diagnostics so we know what's actually defined
     const fns = Object.keys(this)
       .filter(k => typeof this[k] === 'function' && /group.*sync|sync.*group|doGroup/i.test(k))
       .sort();
@@ -78,7 +75,7 @@ try {
   this.syncGroupSheets = this.syncGroupSheets || syncGroupSheets;
   this.syncGroupSheetsMenu = this.syncGroupSheetsMenu || syncGroupSheetsMenu;
 } catch (e) {
-  // no-op: some runtimes may not allow assigning to `this`
+  // no-op
 }
 
 /**
@@ -87,12 +84,13 @@ try {
  * - Uses Courses sheet to convert Program Number -> Program Name.
  * - Accepts either Program Name or Program Number columns on target.
  * - Keeps Reporting Issue? rows (do NOT filter them out).
- * - Will clear & rewrite the data body only (keeps header row).
+ * - Clears & rewrites the data body only (keeps header row).
  *
  * Requires:
  *  - CFG.SHEET_MASTER (e.g., "Master")
- *  - A catalog sheet named "Groups" with columns: Group, Sheet URL  (case-insensitive)
- *  - A sheet named "Courses" with columns: Program Number, Program Name
+ *  - A catalog sheet named "Group Config" (preferred) with: Group ID, Group Name, Spreadsheet URL
+ *    or legacy "Groups" with: Group, Sheet URL
+ *  - A sheet named "Courses" with: Program Number, Program Name
  */
 function syncGroupSheetsStrict() {
   const ss = SpreadsheetApp.getActive();
@@ -103,15 +101,14 @@ function syncGroupSheetsStrict() {
   if (mVals.length <= 1) { toast_('Master is empty; nothing to sync.', true); return; }
   const mHdr = normalizeHeaderRow_(mVals[0]);
   const mm   = mapHeaders_(mHdr);
-
   if (mm.group == null) { toast_('Master is missing "Group" column.', true); return; }
 
   // Build courses map: Program Number -> Program Name
-  const coursesMap = loadCoursesMap_((ss));
+  const coursesMap = loadCoursesMap_(ss);
 
-  // Read group catalog (Group, Sheet URL)
+  // Read group catalog (Group Config preferred)
   const groups = readGroupsCatalog_(ss);
-  if (!groups.length) { toast_('No groups found in the "Groups" catalog.', true); return; }
+  if (!groups.length) { toast_('No groups found in the "Group Config"/"Groups" catalog.', true); return; }
 
   const mBody = mVals.slice(1);
   let totalSheets = 0, totalCells = 0, visited = 0;
@@ -126,9 +123,7 @@ function syncGroupSheetsStrict() {
       return;
     }
 
-    // Determine Master columns for group id / name.
-    // NOTE: In this workbook, "Group" is the *ID* the user belongs to.
-    // So we treat header "Group" as the ID column, and fall back to "Group ID".
+    // Master "Group" is the ID column in this workbook
     const iGroupId   = (mm.group != null) ? mm.group : findHeaderIndex_(mHdr, 'Group ID');
     const iGroupName = findHeaderIndex_(mHdr, 'Group Name');
 
@@ -144,6 +139,7 @@ function syncGroupSheetsStrict() {
       return;
     }
 
+    // Open target spreadsheet
     let targetSS;
     try {
       targetSS = openSpreadsheetByUrlOrId_(gUrl);
@@ -151,14 +147,13 @@ function syncGroupSheetsStrict() {
       Logger.log(`Group "${gName}": cannot open target (${gUrl}): ${e.message}`);
       return;
     }
-
     const targetSheet = targetSS.getSheets()[0]; // convention: first sheet
     if (!targetSheet) {
       Logger.log(`Group "${gName}": no sheets found in target spreadsheet.`);
       return;
     }
 
-    // Ensure target sheet headers are mapped; accept Program Name OR Program Number
+    // Ensure target headers are understood; accept Program Name OR Program Number
     const gMap = mapGroupHeadersFlexible_(targetSheet);
     if (!gMap.ok) {
       Logger.log(`Group "${gName}": missing headers: ${gMap.missing.join(', ')}`);
@@ -167,17 +162,10 @@ function syncGroupSheetsStrict() {
     }
 
     // Build output rows aligned to target header order
-    const out = [];
     const hdr = targetSheet.getRange(1,1,1,targetSheet.getLastColumn()).getValues()[0].map(v=>String(v||'').trim());
     const lower = hdr.map(h=>h.toLowerCase());
+    const out = [];
 
-    // Helper to place a value by header label (case-insensitive)
-    const placeByHeader = (arr, label, value) => {
-      const i = lower.indexOf(String(label||'').toLowerCase());
-      if (i >= 0) arr[i] = value;
-    };
-
-    // We’ll try to read fields from Master using its header map
     const wantDate = (v) => (v instanceof Date) ? v : (parseDate_(v) || v);
 
     rows.forEach(row => {
@@ -194,31 +182,27 @@ function syncGroupSheetsStrict() {
       const reported    = mm.reportedCol    != null ? row[mm.reportedCol] : '';
       const reportedAt  = mm.reportedAtCol  != null ? wantDate(row[mm.reportedAtCol]) : '';
 
-      // Convert Program Number -> Program Name via Courses map (fallback to Master.Program if not found)
       const progName = coursesMap.get(progN) || '';
 
-      // Place values according to the target sheet headers
-      placeByHeader(arr, 'Attendee First Name', first);
-      placeByHeader(arr, 'Attendee Last Name',  last);
-      placeByHeader(arr, 'Attendee PTIN',       ptin);
-      placeByHeader(arr, 'Email',               email);
+      // Place values by exact header text (case-insensitive lookup)
+      placeByHeader_(arr, lower, 'Attendee First Name', first);
+      placeByHeader_(arr, lower, 'Attendee Last Name',  last);
+      placeByHeader_(arr, lower, 'Attendee PTIN',       ptin);
+      placeByHeader_(arr, lower, 'Email',               email);
 
-      // Prefer Program Name if the target has it; otherwise use Program Number
       if (gMap.progName >= 0) {
-        placeByHeader(arr, 'Program Name', progName || progN);
+        placeByHeader_(arr, lower, 'Program Name', progName || progN);
       } else if (gMap.prog >= 0) {
-        placeByHeader(arr, 'Program Number', progN);
+        placeByHeader_(arr, lower, 'Program Number', progN);
       }
 
-      // Hours / Completion
-      placeByHeader(arr, 'CE Hours Awarded', hrs);
-      placeByHeader(arr, 'CE Hours', hrs); // some sheets use this
-      placeByHeader(arr, 'Program Completion Date', comp);
+      placeByHeader_(arr, lower, 'CE Hours Awarded', hrs);
+      placeByHeader_(arr, lower, 'CE Hours', hrs); // some sheets use this label
+      placeByHeader_(arr, lower, 'Program Completion Date', comp);
 
-      // Issues / Reporting
-      placeByHeader(arr, 'Reporting Issue?', issue);
-      placeByHeader(arr, 'Reported?', truthy_(reported));
-      placeByHeader(arr, 'Reported At', reportedAt);
+      placeByHeader_(arr, lower, 'Reporting Issue?', issue);
+      placeByHeader_(arr, lower, 'Reported?', truthy_(reported));
+      placeByHeader_(arr, lower, 'Reported At', reportedAt);
 
       out.push(arr);
     });
@@ -230,11 +214,51 @@ function syncGroupSheetsStrict() {
 
     if (out.length) {
       targetSheet.getRange(2,1,out.length, lastCol).setValues(out);
-      // format date columns if present
+
+      // Date formatting if present
       const iComp = lower.indexOf('program completion date');
       if (iComp >= 0) targetSheet.getRange(2, iComp+1, out.length, 1).setNumberFormat('mm/dd/yyyy');
       const iRepAt = lower.indexOf('reported at');
       if (iRepAt >= 0) targetSheet.getRange(2, iRepAt+1, out.length, 1).setNumberFormat('mm/dd/yyyy');
+
+      // NEW: Enforce checkbox on Reported? column
+      const iRep = lower.indexOf('reported?');
+      if (iRep >= 0) {
+        const repRange = targetSheet.getRange(2, iRep+1, Math.max(out.length,1), 1);
+        const rule = SpreadsheetApp.newDataValidation().requireCheckbox().setAllowInvalid(true).build();
+        repRange.setDataValidation(rule);
+      }
+
+      // NEW: Conditional format: highlight yellow when "Reporting Issue?" is nonblank
+      const iIssue = lower.indexOf('reporting issue?');
+      if (iIssue >= 0) {
+        const issueRange = targetSheet.getRange(2, iIssue+1, Math.max(out.length,1), 1);
+        const rules = targetSheet.getConditionalFormatRules() || [];
+
+        // Remove prior CF rules that target this exact issue column range to avoid duplicates
+        const filtered = rules.filter(r => {
+          const rs = r.getRanges();
+          return !(rs && rs.length === 1 &&
+                   rs[0].getRow() === issueRange.getRow() &&
+                   rs[0].getColumn() === issueRange.getColumn() &&
+                   rs[0].getNumRows() === issueRange.getNumRows() &&
+                   rs[0].getNumColumns() === issueRange.getNumColumns());
+        });
+
+        const colLetter = colToA1_(iIssue+1);
+        // CF uses relative reference from top-left of range; lock the column & row start:
+        // highlight when cell in this column is non-empty
+        const formula = `=LEN($${colLetter}${issueRange.getRow()})>0`;
+
+        const cf = SpreadsheetApp.newConditionalFormatRule()
+          .whenFormulaSatisfied(formula)
+          .setBackground('#fff59d')        // light yellow
+          .setRanges([issueRange])
+          .build();
+
+        filtered.push(cf);
+        targetSheet.setConditionalFormatRules(filtered);
+      }
     }
 
     totalSheets++;
@@ -243,6 +267,12 @@ function syncGroupSheetsStrict() {
   });
 
   toast_(`Group sync done: visited ${visited}, wrote ${totalSheets} sheet(s), ~${totalCells} cells.`);
+}
+
+/** Helper: place value into the array by header label (lowercased array of headers). */
+function placeByHeader_(arr, lower, label, value) {
+  const i = lower.indexOf(String(label||'').toLowerCase());
+  if (i >= 0) arr[i] = value;
 }
 
 /** Open a spreadsheet by URL or Spreadsheet ID */
@@ -272,12 +302,12 @@ function loadCoursesMap_(ss) {
   return map;
 }
 
-/** Read "Groups" or "Group Config" catalog: returns [{groupName, url, groupId}] */
+/** Read "Group Config" (preferred) or "Groups" catalog: returns [{groupName, url, groupId}] */
 function readGroupsCatalog_(ss) {
-  // Prefer "Group Config" (with headers: Group ID, Group Name, Spreadsheet URL)
+  // Preferred: Group Config with headers: Group ID, Group Name, Spreadsheet URL
   let sh = ss.getSheetByName('Group Config');
   if (!sh || sh.getLastRow() < 2) {
-    // Fallback to legacy "Groups" (headers: Group, Sheet URL)
+    // Fallback legacy: Groups with headers: Group, Sheet URL
     sh = ss.getSheetByName('Groups');
   }
   if (!sh || sh.getLastRow() < 2) return [];
@@ -286,7 +316,6 @@ function readGroupsCatalog_(ss) {
   const hdr  = normalizeHeaderRow_(vals[0]);
   const lower= hdr.map(h=>h.toLowerCase());
 
-  // Flexible header candidates
   const idxOfAny = (names) => {
     for (const n of names) {
       const i = lower.indexOf(String(n).toLowerCase());
@@ -314,7 +343,18 @@ function readGroupsCatalog_(ss) {
   return out;
 }
 
-/** Export new function to global for menu handler */
+/** Convert column index (1-based) to A1 letter */
+function colToA1_(c) {
+  let s = '';
+  while (c > 0) {
+    const m = (c - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    c = Math.floor((c - 1) / 26);
+  }
+  return s;
+}
+
+/** Export the strict function for menus */
 try {
   this.syncGroupSheetsStrict = this.syncGroupSheetsStrict || syncGroupSheetsStrict;
 } catch (e) {}
