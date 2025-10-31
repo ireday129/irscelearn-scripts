@@ -229,57 +229,35 @@ function syncGroupSheetsStrict() {
         repRange.setDataValidation(rule);
       }
 
-      // NEW: Conditional format: highlight yellow when "Reporting Issue?" is nonblank
-      const iIssue = lower.indexOf('reporting issue?');
-      if (iIssue >= 0) {
-        const issueRange = targetSheet.getRange(2, iIssue+1, Math.max(out.length,1), 1);
-        const rules = targetSheet.getConditionalFormatRules() || [];
-
-        // Remove prior CF rules that target this exact issue column range to avoid duplicates
-        const filtered = rules.filter(r => {
-          const rs = r.getRanges();
-          return !(rs && rs.length === 1 &&
-                   rs[0].getRow() === issueRange.getRow() &&
-                   rs[0].getColumn() === issueRange.getColumn() &&
-                   rs[0].getNumRows() === issueRange.getNumRows() &&
-                   rs[0].getNumColumns() === issueRange.getNumColumns());
-        });
-
-        const colLetter = colToA1_(iIssue+1);
-        // CF uses relative reference from top-left of range; lock the column & row start:
-        // highlight when cell in this column is non-empty
-        const formula = `=LEN($${colLetter}${issueRange.getRow()})>0`;
-
-        const cf = SpreadsheetApp.newConditionalFormatRule()
-          .whenFormulaSatisfied(formula)
-          .setBackground('#fff59d')        // light yellow
-          .setRanges([issueRange])
-          .build();
-
-        filtered.push(cf);
-        targetSheet.setConditionalFormatRules(filtered);
-      }
 
       // ===== Enhancements for group sheets =====
 
-      // 1) Freeze + protect the header row
+      // 1) Freeze + protect the header row (use RANGE.protect to avoid sheet↔range mismatch)
       try {
         targetSheet.setFrozenRows(1);
-        // Remove old header protections (row 1 exact)
-        (targetSheet.getProtections(SpreadsheetApp.ProtectionType.RANGE) || [])
-          .forEach(p => { const r = p.getRange(); if (r && r.getRow() === 1 && r.getNumRows() === 1) p.remove(); });
-        const headerProt = targetSheet.protect().setDescription('Protect header row');
-        headerProt.setRange(targetSheet.getRange(1, 1, 1, lastCol));
-        // Keep only owner editors (remove others)
-        headerProt.removeEditors(headerProt.getEditors());
+
+        // Remove any existing Range protections that exactly cover row 1 (header)
+        (targetSheet.getProtections(SpreadsheetApp.ProtectionType.RANGE) || []).forEach(p => {
+          const r = p.getRange && p.getRange();
+          if (r && r.getRow() === 1 && r.getNumRows() === 1) p.remove();
+        });
+
+        // Create a RANGE protection directly on the header row
+        const headerRange = targetSheet.getRange(1, 1, 1, lastCol);
+        const headerProt  = headerRange.protect().setDescription('Protect header row');
+        headerProt.removeEditors(headerProt.getEditors()); // keep only owner
+        // Optional: allow viewers/editors to see warning instead of hard block
+        // headerProt.setWarningOnly(true);
       } catch (e) {
         Logger.log('Header protect failed (non-fatal): ' + e.message);
       }
 
-      // 2) Alternating row banding (neutral)
+      // 2) Alternating row banding (neutral) — use RANGE.applyRowBanding
       try {
         (targetSheet.getBandings() || []).forEach(b => b.remove());
-        targetSheet.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY).setHeaderRowColor(null);
+        const bandRange = targetSheet.getRange(1, 1, Math.max(targetSheet.getLastRow(), 2), lastCol);
+        const band = bandRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY);
+        band.setHeaderRowColor(null);
       } catch (e) {
         Logger.log('Banding failed (non-fatal): ' + e.message);
       }
@@ -302,7 +280,7 @@ function syncGroupSheetsStrict() {
         let iHours = lower.indexOf('ce hours awarded');
         if (iHours < 0) iHours = lower.indexOf('ce hours');
         if (iHours >= 0) {
-          targetSheet.getRange(2, iHours + 1, Math.max(out.length, 1), 1).setNumberFormat('0.00');
+          targetSheet.getRange(2, iHours + 1, Math.max(out.length, 1), 1).setNumberFormat('0');
         }
       } catch (e) {
         Logger.log('Autosize/format failed (non-fatal): ' + e.message);
@@ -317,35 +295,33 @@ function syncGroupSheetsStrict() {
         Logger.log('Filter creation failed (non-fatal): ' + e.message);
       }
 
-      // 5) Conditional formatting: soft green when Reported? is TRUE (cell-only)
+      // --- Conditional formatting (reset to only our yellow issue rule) ---
       try {
+        const existing = targetSheet.getConditionalFormatRules() || [];
+        // Build issue range and rule (yellow on nonblank issue cell)
+        const iIssue = lower.indexOf('reporting issue?');
         const iReported = lower.indexOf('reported?');
-        if (iReported >= 0) {
-          const repRange = targetSheet.getRange(2, iReported+1, Math.max(out.length,1), 1);
-          const colLetter  = colToA1_(iReported+1);
-          const startRow   = repRange.getRow();
-          const greenRule  = SpreadsheetApp.newConditionalFormatRule()
-            .whenFormulaSatisfied(`=$${colLetter}${startRow}=TRUE`)
-            .setBackground('#E6F4EA')
-            .setRanges([repRange])
-            .build();
 
-          // Merge with any existing rules but avoid duplicating an identical rule on the same range
-          const rules = (targetSheet.getConditionalFormatRules() || []).filter(r => {
-            const rs = r.getRanges();
-            if (!rs || rs.length !== 1) return true;
-            const x = rs[0];
-            // filter out prior rules that target this exact checkbox range
-            return !(x.getRow() === repRange.getRow() &&
-                     x.getColumn() === repRange.getColumn() &&
-                     x.getNumRows() === repRange.getNumRows() &&
-                     x.getNumColumns() === repRange.getNumColumns());
-          });
-          rules.push(greenRule);
-          targetSheet.setConditionalFormatRules(rules);
+        const newRules = [];
+
+        if (iIssue >= 0) {
+          const issueRange = targetSheet.getRange(2, iIssue + 1, Math.max(out.length, 1), 1);
+          const issueColLetter = colToA1_(iIssue + 1);
+          const issueFormula = `=LEN($${issueColLetter}${issueRange.getRow()})>0`;
+          const issueRule = SpreadsheetApp.newConditionalFormatRule()
+            .whenFormulaSatisfied(issueFormula)
+            .setBackground('#fff59d') // light yellow
+            .setRanges([issueRange])
+            .build();
+          newRules.push(issueRule);
         }
+
+        // Do NOT add green rule for Reported? anymore.
+
+        // Apply only our curated rules (this also removes any prior row-wide green rules)
+        targetSheet.setConditionalFormatRules(newRules);
       } catch (e) {
-        Logger.log('Green CF (cell-only) failed (non-fatal): ' + e.message);
+        Logger.log('Conditional-format reset failed (non-fatal): ' + e.message);
       }
 
       // 6) Duplicate guard (same Attendee PTIN + Program Name) highlighted light red
@@ -381,73 +357,98 @@ function syncGroupSheetsStrict() {
         Logger.log('Email normalize failed (non-fatal): ' + e.message);
       }
 
+      // Shared sync timestamp for notes/toasts/summary
+      const syncTimestamp = new Date();
+      const syncTimestampStr = Utilities.formatDate(syncTimestamp, Session.getScriptTimeZone(), 'MMM d, yyyy h:mm a');
+
       // 8) “Last synced” note on the header’s last column cell + visible toast
       try {
-        const lastSynced = new Date();
-        targetSheet.getRange(1, lastCol).setNote('Last synced: ' + lastSynced);
-        // Show a toast in the active UI (the user can close it)
+        targetSheet.getRange(1, Math.max(1, lastCol)).setNote('Last synced: ' + syncTimestampStr);
+
+        // Show toast in the group's spreadsheet UI instead of the Master
+        const original = SpreadsheetApp.getActive();
         try {
-          SpreadsheetApp.getActive().toast(
-            `${gName} synced at ${Utilities.formatDate(lastSynced, Session.getScriptTimeZone(), 'MMM d, yyyy h:mm a')}`,
+          SpreadsheetApp.setActiveSpreadsheet(targetSS);
+          targetSS.toast(
+            `${gName} synced at ${syncTimestampStr}`,
             'Group Sync',
             7
           );
-        } catch (uiErr) {
-          // non-fatal if script is not running in a visible UI
-          Logger.log('Toast failed (non-fatal): ' + uiErr.message);
+        } finally {
+          // Restore whatever the active spreadsheet was
+          SpreadsheetApp.setActiveSpreadsheet(original);
         }
       } catch (e) {
-        Logger.log('Last-synced note/ toast failed (non-fatal): ' + e.message);
+        Logger.log('Last-synced note/toast failed (non-fatal): ' + e.message);
       }
 
-      // 10) Quick summary block: totals + distinct attendee count
+      // 10) Summary block: totals + distinct attendee counts
       try {
-        let iHours2 = lower.indexOf('ce hours awarded');
-        if (iHours2 < 0) iHours2 = lower.indexOf('ce hours');
-        const iIssue2 = lower.indexOf('reporting issue?');
-        const iEmail2 = lower.indexOf('email');
-        const iPtin2  = lower.indexOf('attendee ptin');
-        const iFirst2 = lower.indexOf('attendee first name');
-        const iLast2  = lower.indexOf('attendee last name');
+        const iHours2  = (() => { const x = lower.indexOf('ce hours awarded'); return x >= 0 ? x : lower.indexOf('ce hours'); })();
+        const iIssue2  = lower.indexOf('reporting issue?');
+        const iEmail2  = lower.indexOf('email');
+        const iPtin2   = lower.indexOf('attendee ptin');
+        const iFirst2  = lower.indexOf('attendee first name');
+        const iLast2   = lower.indexOf('attendee last name');
 
-        // Build a distinct-attendee set: prefer email, else PTIN, else "first last"
-        const keys = new Set();
+        // Distinct attendees across the sheet (reported students definition)
+        const allAttendees = new Set();
         for (let r = 0; r < out.length; r++) {
           const emailVal = iEmail2 >= 0 ? String(out[r][iEmail2] || '').trim().toLowerCase() : '';
           const ptinVal  = iPtin2  >= 0 ? String(out[r][iPtin2]  || '').trim().toUpperCase() : '';
           const fVal     = iFirst2 >= 0 ? String(out[r][iFirst2] || '').trim().toLowerCase() : '';
           const lVal     = iLast2  >= 0 ? String(out[r][iLast2]  || '').trim().toLowerCase() : '';
-          let k = emailVal || ptinVal || (fVal || '') + '|' + (lVal || '');
-          if (k.replace(/\|/g,'').length === 0) continue; // guard against all-empty
-          keys.add(k);
+          const k = emailVal || ptinVal || (fVal + '|' + lVal);
+          if (k.replace(/\|/g,'').length) allAttendees.add(k);
         }
 
-        const startSummary = Math.max(targetSheet.getLastRow() + 2, 4);
-        targetSheet.getRange(startSummary, 1, 1, 2).setValues([['Summary','']]).setFontWeight('bold');
-
-        if (iHours2 >= 0) {
-          targetSheet.getRange(startSummary+1, 1).setValue('Total CE Hours:');
-          targetSheet.getRange(startSummary+1, 2)
-            .setFormula(`=SUM(${colToA1_(iHours2+1)}2:${colToA1_(iHours2+1)}${2+out.length-1})`);
-        }
-
+        // Distinct attendees who have an issue
+        const issueAttendees = new Set();
         if (iIssue2 >= 0) {
-          // Count distinct PTINs where Reporting Issue? is nonblank
-          const iPtin2Strict = lower.indexOf('attendee ptin');
-          let issuePtinKeys = new Set();
-          if (iPtin2Strict >= 0) {
-            for (let r = 0; r < out.length; r++) {
-              const issueVal = String(out[r][iIssue2] || '').trim();
-              const ptinVal  = String(out[r][iPtin2Strict] || '').trim().toUpperCase();
-              if (issueVal && ptinVal) issuePtinKeys.add(ptinVal);
-            }
+          for (let r = 0; r < out.length; r++) {
+            const issueVal = String(out[r][iIssue2] || '').trim();
+            if (!issueVal) continue;
+            const emailVal = iEmail2 >= 0 ? String(out[r][iEmail2] || '').trim().toLowerCase() : '';
+            const ptinVal  = iPtin2  >= 0 ? String(out[r][iPtin2]  || '').trim().toUpperCase() : '';
+            const fVal     = iFirst2 >= 0 ? String(out[r][iFirst2] || '').trim().toLowerCase() : '';
+            const lVal     = iLast2  >= 0 ? String(out[r][iLast2]  || '').trim().toLowerCase() : '';
+            const k = emailVal || ptinVal || (fVal + '|' + lVal);
+            if (k.replace(/\|/g,'').length) issueAttendees.add(k);
           }
-          targetSheet.getRange(startSummary + 2, 1).setValue('Students with Issues:');
-          targetSheet.getRange(startSummary + 2, 2).setValue(issuePtinKeys.size);
         }
 
-        targetSheet.getRange(startSummary+3, 1).setValue('Reported Students:');
-        targetSheet.getRange(startSummary+3, 2).setValue(keys.size);
+        // Place the summary well below the data (2 blank rows after the data)
+        const summaryRow = targetSheet.getLastRow() + 2;
+        targetSheet.getRange(summaryRow, 1, 5, 2).clearContent();
+
+        // Header with "Sheet Last Updated" helper
+        targetSheet.getRange(summaryRow, 1, 1, 2)
+          .setValues([['Summary', `Sheet Last Updated: ${syncTimestampStr}`]])
+          .setFontWeight('bold');
+
+        // Total CE Hours (if present)
+        if (iHours2 >= 0) {
+          targetSheet.getRange(summaryRow + 1, 1).setValue('Total CE Hours:');
+          targetSheet.getRange(summaryRow + 1, 2)
+            .setFormula(`=SUM(${colToA1_(iHours2+1)}2:${colToA1_(iHours2+1)}${1 + out.length})`);
+        }
+
+        // Total Students = distinct attendee count on this sheet
+        targetSheet.getRange(summaryRow + 2, 1).setValue('Total Students:');
+        targetSheet.getRange(summaryRow + 2, 2).setValue(allAttendees.size);
+
+        // Students with Issues = distinct attendee count with nonblank issue
+        targetSheet.getRange(summaryRow + 3, 1).setValue('Students with Issues:');
+        targetSheet.getRange(summaryRow + 3, 2).setValue(issueAttendees.size);
+
+        // Reported Students = distinct attendees on this sheet (retained per prior definition)
+        targetSheet.getRange(summaryRow + 4, 1).setValue('Reported Students:');
+        targetSheet.getRange(summaryRow + 4, 2).setValue(allAttendees.size);
+
+        // Keep columns auto-sized so headers are readable
+        for (let pass = 0; pass < 2; pass++) {
+          for (let c = 1; c <= lastCol; c++) targetSheet.autoResizeColumn(c);
+        }
       } catch (e) {
         Logger.log('Summary block failed (non-fatal): ' + e.message);
       }
