@@ -128,7 +128,7 @@ function stepMarkReported_(offset, limit) {
     toReportedHours.push({
       'Attendee First Name': (iCF>=0 ? crow[iCF] : ''),
       'Attendee Last Name':  (iCL>=0 ? crow[iCL] : ''),
-      'PTIN':                ptin,
+      'Attendee PTIN':       ptin,
       'Program Number':      prog,
       'CE Hours':            (iCH>=0 ? crow[iCH] : ''),
       'Email':               email, // (you said you may remove Email column from RH; this still writes it if present)
@@ -173,7 +173,7 @@ function appendToReportedHours_(ss, rows) {
       switch (key) {
         case 'Attendee First Name':       arr[index] = r['Attendee First Name']; break;
         case 'Attendee Last Name':        arr[index] = r['Attendee Last Name'];  break;
-        case 'PTIN':                      arr[index] = r['PTIN'];                break;
+        case 'Attendee PTIN':             arr[index] = r['Attendee PTIN']; break;
         case 'Program Number':            arr[index] = r['Program Number'];      break;
         case 'CE Hours':                  arr[index] = r['CE Hours'];            break;
         case 'Email':                     arr[index] = r['Email'];               break; // harmless if column not present
