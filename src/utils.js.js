@@ -209,7 +209,56 @@ if (typeof buildUnresolvedIssueIndex_ !== 'function') {
 
     return out;
   }
-  /** Minimal recheckMaster so the menu isn’t broken. */
+}
+// Close the if wrapper for buildUnresolvedIssueIndex_ here
+}
+
+if (typeof mapHeaders_ !== 'function') {
+  /**
+   * Master header mapper (case-insensitive, with aliases).
+   * Prefers CFG.COL_HEADERS keys when present; otherwise falls back to common aliases.
+   */
+  function mapHeaders_(hdr) {
+    const lower = hdr.map(h => String(h || '').trim().toLowerCase().replace(/\s+/g, ' '));
+
+    const findAny = (candidates) => {
+      for (const c of candidates) {
+        const i = lower.indexOf(String(c || '').toLowerCase().trim().replace(/\s+/g, ' '));
+        if (i >= 0) return i;
+      }
+      return null;
+    };
+
+    // Pull desired canonical labels from CFG if available
+    const H = (typeof CFG !== 'undefined' && CFG.COL_HEADERS) ? CFG.COL_HEADERS : {};
+
+    // Build candidate lists (CFG value first, then aliases)
+    const C = {
+      firstName:  [H.firstName,  'attendee first name', 'first name', 'first'],
+      lastName:   [H.lastName,   'attendee last name',  'last name',  'last', 'surname'],
+      ptin:       [H.ptin,       'ptin', 'attendee ptin'],
+      email:      [H.email,      'email', 'e-mail', 'mail'],
+      program:    [H.program,    'program number', 'program', 'program #', 'course number'],
+      hours:      [H.hours,      'ce hours', 'ce hours awarded', 'hours'],
+      completion: [H.completion, 'program completion date', 'completion date', 'date completed'],
+      group:      [H.group,      'group'],
+      masterIssueCol: [H.masterIssueCol, 'reporting issue?', 'reporting issue'],
+      reportedCol:    [H.reportedCol,    'reported?', 'reported'],
+      updatedCol:     [H.updatedCol,     'last updated'],
+      reportedAtCol:  [H.reportedAtCol,  'date reported', 'reported at', 'reported date'],
+      source:         [H.source,         'source']
+    };
+
+    const out = {};
+    for (const [key, candidates] of Object.entries(C)) {
+      const candList = candidates.filter(Boolean);
+      out[key] = candList.length ? findAny(candList) : null;
+    }
+    return out;
+  }
+}
+
+/** Minimal recheckMaster so the menu isn’t broken. */
 function recheckMaster() {
   try {
     const ss = SpreadsheetApp.getActive();
@@ -254,16 +303,22 @@ function recheckMaster() {
 /** Clean header mapper (case-insensitive) */
 function mapCleanHeaders_(hdr) {
   const lower = hdr.map(h => String(h || '').toLowerCase().trim().replace(/\s+/g, ' '));
-  const find = (label) => lower.indexOf(String(label || '').toLowerCase().trim().replace(/\s+/g, ' '));
+  const findAny = (names) => {
+    for (const n of names) {
+      const i = lower.indexOf(String(n || '').toLowerCase().trim().replace(/\s+/g, ' '));
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
   return {
-    firstName:  find('attendee first name'),
-    lastName:   find('attendee last name'),
-    ptin:       find('attendee ptin'),
-    email:      find('email'),
-    program:    find('program number'),
-    hours:      find('ce hours awarded'),
-    completion: find('program completion date'),
-    issue:      find('reporting issue?')
+    firstName:  findAny(['attendee first name','first name','first']),
+    lastName:   findAny(['attendee last name','last name','last','surname']),
+    ptin:       findAny(['attendee ptin','ptin']),
+    email:      findAny(['email','e-mail','mail']),
+    program:    findAny(['program number','program','# program','program #','course number']),
+    hours:      findAny(['ce hours awarded','ce hours','hours']),
+    completion: findAny(['program completion date','completion date','date completed']),
+    issue:      findAny(['reporting issue?','reporting issue'])
   };
 }
 
@@ -290,5 +345,4 @@ function formatToMDY_(v) {
   }
   const d = parseDate_(v);
   return d ? Utilities.formatDate(d, Session.getScriptTimeZone(), 'MM/dd/yyyy') : '';
-}
 }
