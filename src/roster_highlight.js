@@ -1,32 +1,43 @@
 /**
- * Highlight Roster rows (entire row) for anyone found in "Reported Hours".
+ * Highlight Roster rows (entire row) for anyone who has ANY row marked Reported?=TRUE in "Master".
  * - Matches by PTIN (normalized to P0#######).
  * - Uses a soft yellow highlight for the whole row.
- * - Does NOT change "Valid?"—it’s purely visual so you can manually review.
+ * - If Roster.Valid? is TRUE for that row, clear the highlight (no background).
  */
 function highlightRosterFromReportedHours(quiet) {
   const ss = SpreadsheetApp.getActive();
   const roster = mustGet_(ss, CFG.SHEET_ROSTER);
-  const rh     = mustGet_(ss, 'Reported Hours');
+  const master = mustGet_(ss, CFG.SHEET_MASTER);
 
-  // --- Load Reported Hours ---
-  const rhVals = rh.getDataRange().getValues();
-  if (rhVals.length <= 1) { if (!quiet) toast_('Reported Hours is empty; nothing to highlight.'); return; }
-  const rhHdr  = rhVals[0].map(s => String(s || '').trim().toLowerCase());
-  const iRhPT  = Math.max(rhHdr.indexOf('ptin'), rhHdr.indexOf('attendee ptin'));
-  if (iRhPT < 0) { if (!quiet) toast_('Reported Hours missing PTIN column.', true); return; }
+  // --- Load Master and build set of reported PTINs ---
+  const mVals = master.getDataRange().getValues();
+  if (mVals.length <= 1) { if (!quiet) toast_('Master is empty; nothing to highlight.'); return; }
 
-  // Build a set of PTINs that have any reported row
-  const reportedPtins = new Set();
-  for (let r = 1; r < rhVals.length; r++) {
-    const ptin = formatPtinP0_(rhVals[r][iRhPT] || '');
-    if (ptin) reportedPtins.add(ptin);
+  const mHdr = normalizeHeaderRow_(mVals[0]);
+  const mm   = mapHeaders_(mHdr);
+
+  if (mm.ptin == null || mm.reportedCol == null) {
+    if (!quiet) toast_('Master missing PTIN and/or Reported? column.', true);
+    return;
   }
-  if (!reportedPtins.size) { if (!quiet) toast_('No PTINs found in Reported Hours.', true); return; }
+
+  const reportedPtins = new Set();
+  const mBody = mVals.slice(1);
+  for (let i = 0; i < mBody.length; i++) {
+    const row = mBody[i];
+    const ptin = formatPtinP0_(row[mm.ptin] || '');
+    const isReported = truthy_(row[mm.reportedCol]);
+    if (ptin && isReported) reportedPtins.add(ptin);
+  }
+
+  if (!reportedPtins.size) { if (!quiet) toast_('No Reported?=TRUE rows in Master; nothing to highlight.'); return; }
 
   // --- Map Roster headers ---
   const rMap = mapRosterHeaders_(roster);
   if (!rMap) { if (!quiet) toast_('Roster header mapping failed.', true); return; }
+  if (rMap.ptin < 0) { if (!quiet) toast_('Roster missing PTIN column.', true); return; }
+  // rMap.valid may be -1 if the column is missing, handle gracefully
+  const hasValidCol = typeof rMap.valid === 'number' && rMap.valid >= 0;
 
   const lastRow = roster.getLastRow();
   const lastCol = roster.getLastColumn();
@@ -36,28 +47,30 @@ function highlightRosterFromReportedHours(quiet) {
   const vals = dataRange.getValues();
   const colors = dataRange.getBackgrounds();
 
-  // Soft yellow
   const YELLOW = '#fff59d';
 
-  for (let i = 0; i < vals.length; i++) {
-    const row = vals[i];
-    const ptin = formatPtinP0_(row[rMap.ptin] || '');
-    const shouldHighlight = ptin && reportedPtins.has(ptin);
+  for (let r = 0; r < vals.length; r++) {
+    const row = vals[r];
+    const ptin  = formatPtinP0_(row[rMap.ptin] || '');
+    const valid = hasValidCol ? truthy_(row[rMap.valid]) : false;
 
-    // Paint or clear the entire row
-    const newRowColors = new Array(lastCol).fill(shouldHighlight ? YELLOW : null);
-    colors[i] = newRowColors;
+    let rowColor = null; // null clears to default background
+    if (!valid && ptin && reportedPtins.has(ptin)) {
+      rowColor = YELLOW;
+    }
+
+    const newRowColors = new Array(lastCol).fill(rowColor);
+    colors[r] = newRowColors;
   }
 
   dataRange.setBackgrounds(colors);
-  if (!quiet) toast_('Roster highlighting updated from Reported Hours.');
+  if (!quiet) toast_('Roster highlighting updated from Master.Reported?.');
 }
 
-/** Menu-safe wrapper */
 function highlightRosterFromReportedHoursMenu() {
   try {
     highlightRosterFromReportedHours(true);
-    toast_('Roster highlighting updated from Reported Hours.');
+    toast_('Roster highlighting updated from Master.Reported?.');
   } catch (e) {
     toast_('Failed to update roster highlighting: ' + e.message, true);
     Logger.log(e.stack || e);
