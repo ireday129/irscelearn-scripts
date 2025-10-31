@@ -259,6 +259,133 @@ function syncGroupSheetsStrict() {
         filtered.push(cf);
         targetSheet.setConditionalFormatRules(filtered);
       }
+
+      // ===== Enhancements for group sheets =====
+
+      // 1) Freeze + protect the header row
+      try {
+        targetSheet.setFrozenRows(1);
+        // Remove old header protections (row 1 exact)
+        (targetSheet.getProtections(SpreadsheetApp.ProtectionType.RANGE) || [])
+          .forEach(p => { const r = p.getRange(); if (r && r.getRow() === 1 && r.getNumRows() === 1) p.remove(); });
+        const headerProt = targetSheet.protect().setDescription('Protect header row');
+        headerProt.setRange(targetSheet.getRange(1, 1, 1, lastCol));
+        // Keep only owner editors (remove others)
+        headerProt.removeEditors(headerProt.getEditors());
+      } catch (e) {
+        Logger.log('Header protect failed (non-fatal): ' + e.message);
+      }
+
+      // 2) Alternating row banding (neutral)
+      try {
+        (targetSheet.getBandings() || []).forEach(b => b.remove());
+        targetSheet.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY).setHeaderRowColor(null);
+      } catch (e) {
+        Logger.log('Banding failed (non-fatal): ' + e.message);
+      }
+
+      // 3) Auto-size columns + enforce sane formats
+      try {
+        for (let c = 1; c <= lastCol; c++) targetSheet.autoResizeColumn(c);
+        // Hours number format (CE Hours Awarded / CE Hours)
+        let iHours = lower.indexOf('ce hours awarded');
+        if (iHours < 0) iHours = lower.indexOf('ce hours');
+        if (iHours >= 0) {
+          targetSheet.getRange(2, iHours+1, Math.max(out.length,1), 1).setNumberFormat('0.00');
+        }
+      } catch (e) {
+        Logger.log('Autosize/format failed (non-fatal): ' + e.message);
+      }
+
+      // 4) Filter view on full table
+      try {
+        const prevFilter = targetSheet.getFilter();
+        if (prevFilter) prevFilter.remove();
+        targetSheet.getRange(1, 1, Math.max(targetSheet.getLastRow(), 2), lastCol).createFilter();
+      } catch (e) {
+        Logger.log('Filter creation failed (non-fatal): ' + e.message);
+      }
+
+      // 5) Conditional formatting: soft green when Reported? is TRUE
+      try {
+        const iReported = lower.indexOf('reported?');
+        if (iReported >= 0) {
+          const dataRange  = targetSheet.getRange(2, 1, Math.max(out.length,1), lastCol);
+          const colLetter  = colToA1_(iReported+1);
+          const startRow   = 2;
+          const greenRule  = SpreadsheetApp.newConditionalFormatRule()
+            .whenFormulaSatisfied(`=$${colLetter}${startRow}=TRUE`)
+            .setBackground('#E6F4EA')
+            .setRanges([dataRange])
+            .build();
+          const rules = targetSheet.getConditionalFormatRules() || [];
+          rules.push(greenRule);
+          targetSheet.setConditionalFormatRules(rules);
+        }
+      } catch (e) {
+        Logger.log('Green CF failed (non-fatal): ' + e.message);
+      }
+
+      // 6) Duplicate guard (same Attendee PTIN + Program Name) highlighted light red
+      try {
+        const iPTIN     = lower.indexOf('attendee ptin');
+        const iProgName = lower.indexOf('program name');
+        if (iPTIN >= 0 && iProgName >= 0) {
+          const dataRange = targetSheet.getRange(2, 1, Math.max(out.length,1), lastCol);
+          const aPTIN = colToA1_(iPTIN+1);
+          const aProg = colToA1_(iProgName+1);
+          const dupRule = SpreadsheetApp.newConditionalFormatRule()
+            .whenFormulaSatisfied(`=COUNTIFS($${aPTIN}:$${aPTIN},$${aPTIN}2,$${aProg}:$${aProg},$${aProg}2)>1`)
+            .setBackground('#fde2e1')
+            .setRanges([dataRange])
+            .build();
+          const rules = targetSheet.getConditionalFormatRules() || [];
+          rules.push(dupRule);
+          targetSheet.setConditionalFormatRules(rules);
+        }
+      } catch (e) {
+        Logger.log('Duplicate CF failed (non-fatal): ' + e.message);
+      }
+
+      // 7) Email normalization (lowercase)
+      try {
+        const iEmail = lower.indexOf('email');
+        if (iEmail >= 0) {
+          const emailRange = targetSheet.getRange(2, iEmail+1, out.length, 1);
+          const emails = emailRange.getValues().map(r => [String(r[0]||'').trim().toLowerCase()]);
+          if (emails.length) emailRange.setValues(emails);
+        }
+      } catch (e) {
+        Logger.log('Email normalize failed (non-fatal): ' + e.message);
+      }
+
+      // 8) “Last synced” note on the header’s last column cell
+      try {
+        targetSheet.getRange(1, lastCol).setNote('Last synced: ' + new Date());
+      } catch (e) {
+        Logger.log('Last-synced note failed (non-fatal): ' + e.message);
+      }
+
+      // 10) Quick summary row (optional): total hours & count of issues
+      try {
+        let iHours2 = lower.indexOf('ce hours awarded');
+        if (iHours2 < 0) iHours2 = lower.indexOf('ce hours');
+        const iIssue2 = lower.indexOf('reporting issue?');
+        const startSummary = Math.max(targetSheet.getLastRow() + 2, 4);
+        targetSheet.getRange(startSummary, 1, 1, 2).setValues([['Summary','']]).setFontWeight('bold');
+        if (iHours2 >= 0) {
+          targetSheet.getRange(startSummary+1, 1).setValue('Total CE Hours:');
+          targetSheet.getRange(startSummary+1, 2)
+            .setFormula(`=SUM(${colToA1_(iHours2+1)}2:${colToA1_(iHours2+1)}${2+out.length-1})`);
+        }
+        if (iIssue2 >= 0) {
+          targetSheet.getRange(startSummary+2, 1).setValue('Rows with Issues:');
+          targetSheet.getRange(startSummary+2, 2)
+            .setFormula(`=COUNTIF(${colToA1_(iIssue2+1)}2:${colToA1_(iIssue2+1)}${2+out.length-1},"<>")`);
+        }
+      } catch (e) {
+        Logger.log('Summary block failed (non-fatal): ' + e.message);
+      }
     }
 
     totalSheets++;
