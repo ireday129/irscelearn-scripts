@@ -43,3 +43,27 @@ function mapGroupHeadersFlexible_(sheet){
 
   return { ok, missing: requiredMissing, ...map };
 }
+/** Public entrypoint for the menu item: “Sync Group Sheets (strict)” */
+function syncGroupSheets() {
+  try {
+    // Prefer a strict/primary implementation if present
+    if (typeof syncGroupSheetsStrict === 'function') return syncGroupSheetsStrict();
+    if (typeof doGroupSyncAll_ === 'function')       return doGroupSyncAll_();
+    if (typeof runGroupSync === 'function')          return runGroupSync();
+    if (typeof groupSyncMain === 'function')         return groupSyncMain();
+    if (typeof syncGroupsFlexible === 'function')    return syncGroupsFlexible();
+
+    // Fallback: helpful diagnostics so we know what's actually defined
+    const fns = Object.keys(this)
+      .filter(k => typeof this[k] === 'function' && /group.*sync|sync.*group|doGroup/i.test(k))
+      .sort();
+    toast_(
+      'No concrete group sync function found for syncGroupSheets(). ' +
+      (fns.length ? 'Candidates: ' + fns.join(', ') : 'No group-sync-like functions detected.'),
+      true
+    );
+  } catch (err) {
+    toast_('syncGroupSheets failed: ' + (err && err.message ? err.message : err), true);
+    Logger.log(err && err.stack ? err.stack : err);
+  }
+}
