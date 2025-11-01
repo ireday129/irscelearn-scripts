@@ -443,7 +443,7 @@ function syncGroupSheetsStrict() {
 
         // Total Students = distinct attendee count on this sheet
         targetSheet.getRange(summaryRow + 2, 1).setValue('Total Students:');
-        targetSheet.getRange(summaryRow + 2, 2).setValue(allAttendees.size);
+        targetSheet.getRange(summaryRow + 2, 2).setValue(countDistinctAttendeesOnSheet_(targetSheet, lower, lastCol));
 
         // Students with Issues = distinct attendee count with nonblank issue
         targetSheet.getRange(summaryRow + 3, 1).setValue('Students with Issues:');
@@ -558,6 +558,40 @@ function colToA1_(c) {
     c = Math.floor((c - 1) / 26);
   }
   return s;
+}
+
+/**
+ * Count distinct attendees on the TARGET SHEET by scanning all rows (no caps).
+ * Key priority: Email > Attendee PTIN > First+Last.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {string[]} lower Lowercased header labels for the sheet's first row
+ * @param {number} lastCol Last column index of the sheet
+ */
+function countDistinctAttendeesOnSheet_(sheet, lower, lastCol) {
+  const totalRows = sheet.getLastRow();
+  if (totalRows <= 1) return 0; // header only
+
+  // Indices based on header labels
+  const iEmail = lower.indexOf('email');
+  const iPtin  = lower.indexOf('attendee ptin');
+  const iFirst = lower.indexOf('attendee first name');
+  const iLast  = lower.indexOf('attendee last name');
+
+  // Read the full body (row 2 .. lastRow) in one pass
+  const numRows = totalRows - 1;
+  const body = sheet.getRange(2, 1, numRows, lastCol).getValues();
+
+  const seen = new Set();
+  for (let r = 0; r < body.length; r++) {
+    const row = body[r];
+    const emailVal = iEmail >= 0 ? String(row[iEmail] || '').trim().toLowerCase() : '';
+    const ptinVal  = iPtin  >= 0 ? String(row[iPtin]  || '').trim().toUpperCase() : '';
+    const fVal     = iFirst >= 0 ? String(row[iFirst] || '').trim().toLowerCase() : '';
+    const lVal     = iLast  >= 0 ? String(row[iLast]  || '').trim().toLowerCase() : '';
+    const key = emailVal || ptinVal || (fVal + '|' + lVal);
+    if (key.replace(/\|/g, '').length) seen.add(key);
+  }
+  return seen.size;
 }
 
 /** Export the strict function for menus */
