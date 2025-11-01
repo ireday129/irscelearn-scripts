@@ -295,15 +295,13 @@ function syncGroupSheetsStrict() {
         Logger.log('Filter creation failed (non-fatal): ' + e.message);
       }
 
-      // --- Conditional formatting (reset to only our yellow issue rule) ---
+      // --- Conditional formatting (reset to only our yellow issue rule + new green text rule for Reported?) ---
       try {
         const existing = targetSheet.getConditionalFormatRules() || [];
-        // Build issue range and rule (yellow on nonblank issue cell)
         const iIssue = lower.indexOf('reporting issue?');
         const iReported = lower.indexOf('reported?');
-
         const newRules = [];
-
+        // 1) Yellow for nonblank Reporting Issue?
         if (iIssue >= 0) {
           const issueRange = targetSheet.getRange(2, iIssue + 1, Math.max(out.length, 1), 1);
           const issueColLetter = colToA1_(iIssue + 1);
@@ -315,10 +313,21 @@ function syncGroupSheetsStrict() {
             .build();
           newRules.push(issueRule);
         }
-
-        // Do NOT add green rule for Reported? anymore.
-
-        // Apply only our curated rules (this also removes any prior row-wide green rules)
+        // 2) Green text for Reported? TRUE (background white)
+        if (iReported >= 0) {
+          const reportedRange = targetSheet.getRange(2, iReported + 1, Math.max(out.length, 1), 1);
+          const reportedColLetter = colToA1_(iReported + 1);
+          const rowStart = reportedRange.getRow();
+          const reportedFormula = `=$${reportedColLetter}${rowStart}=TRUE`;
+          const reportedRule = SpreadsheetApp.newConditionalFormatRule()
+            .whenFormulaSatisfied(reportedFormula)
+            .setBackground('#ffffff')
+            .setFontColor('#1e8e3e')
+            .setRanges([reportedRange])
+            .build();
+          newRules.push(reportedRule);
+        }
+        // Overwrite any prior rules
         targetSheet.setConditionalFormatRules(newRules);
       } catch (e) {
         Logger.log('Conditional-format reset failed (non-fatal): ' + e.message);
@@ -357,30 +366,9 @@ function syncGroupSheetsStrict() {
         Logger.log('Email normalize failed (non-fatal): ' + e.message);
       }
 
-      // Shared sync timestamp for notes/toasts/summary
+      // Shared sync timestamp for summary block
       const syncTimestamp = new Date();
       const syncTimestampStr = Utilities.formatDate(syncTimestamp, Session.getScriptTimeZone(), 'MMM d, yyyy h:mm a');
-
-      // 8) “Last synced” note on the header’s last column cell + visible toast
-      try {
-        targetSheet.getRange(1, Math.max(1, lastCol)).setNote('Last synced: ' + syncTimestampStr);
-
-        // Show toast in the group's spreadsheet UI instead of the Master
-        const original = SpreadsheetApp.getActive();
-        try {
-          SpreadsheetApp.setActiveSpreadsheet(targetSS);
-          targetSS.toast(
-            `${gName} synced at ${syncTimestampStr}`,
-            'Group Sync',
-            7
-          );
-        } finally {
-          // Restore whatever the active spreadsheet was
-          SpreadsheetApp.setActiveSpreadsheet(original);
-        }
-      } catch (e) {
-        Logger.log('Last-synced note/toast failed (non-fatal): ' + e.message);
-      }
 
       // 10) Summary block: totals + distinct attendee counts
       try {
@@ -390,8 +378,9 @@ function syncGroupSheetsStrict() {
         const iPtin2   = lower.indexOf('attendee ptin');
         const iFirst2  = lower.indexOf('attendee first name');
         const iLast2   = lower.indexOf('attendee last name');
+        const iRep2    = lower.indexOf('reported?');
 
-        // Distinct attendees across the sheet (reported students definition)
+        // Distinct attendees across the sheet
         const allAttendees = new Set();
         for (let r = 0; r < out.length; r++) {
           const emailVal = iEmail2 >= 0 ? String(out[r][iEmail2] || '').trim().toLowerCase() : '';
@@ -417,20 +406,39 @@ function syncGroupSheetsStrict() {
           }
         }
 
+        // Distinct attendees who have Reported? TRUE
+        const reportedAttendees = new Set();
+        if (iRep2 >= 0) {
+          for (let r = 0; r < out.length; r++) {
+            if (truthy_(out[r][iRep2])) {
+              const emailVal = iEmail2 >= 0 ? String(out[r][iEmail2] || '').trim().toLowerCase() : '';
+              const ptinVal  = iPtin2  >= 0 ? String(out[r][iPtin2]  || '').trim().toUpperCase() : '';
+              const fVal     = iFirst2 >= 0 ? String(out[r][iFirst2] || '').trim().toLowerCase() : '';
+              const lVal     = iLast2  >= 0 ? String(out[r][iLast2]  || '').trim().toLowerCase() : '';
+              const k = emailVal || ptinVal || (fVal + '|' + lVal);
+              if (k.replace(/\|/g,'').length) reportedAttendees.add(k);
+            }
+          }
+        }
+
         // Place the summary well below the data (2 blank rows after the data)
         const summaryRow = targetSheet.getLastRow() + 2;
-        targetSheet.getRange(summaryRow, 1, 5, 2).clearContent();
+        // 6 rows: header + 4 metrics + 1 report last updated
+        targetSheet.getRange(summaryRow, 1, 6, 2).clearContent();
 
-        // Header with "Sheet Last Updated" helper
+        // Header: just 'Summary'
         targetSheet.getRange(summaryRow, 1, 1, 2)
-          .setValues([['Summary', `Sheet Last Updated: ${syncTimestampStr}`]])
+          .setValues([['Summary', '']])
           .setFontWeight('bold');
 
-        // Total CE Hours (if present)
-        if (iHours2 >= 0) {
+        // Total CE Hours (if present, only where Reported? is TRUE)
+        if (iHours2 >= 0 && iRep2 >= 0) {
+          const hoursCol = colToA1_(iHours2+1);
+          const repCol = colToA1_(iRep2+1);
+          const endRow = 1 + out.length;
           targetSheet.getRange(summaryRow + 1, 1).setValue('Total CE Hours:');
           targetSheet.getRange(summaryRow + 1, 2)
-            .setFormula(`=SUM(${colToA1_(iHours2+1)}2:${colToA1_(iHours2+1)}${1 + out.length})`);
+            .setFormula(`=SUMIFS(${hoursCol}2:${hoursCol}${endRow}, ${repCol}2:${repCol}${endRow}, TRUE)`);
         }
 
         // Total Students = distinct attendee count on this sheet
@@ -441,9 +449,14 @@ function syncGroupSheetsStrict() {
         targetSheet.getRange(summaryRow + 3, 1).setValue('Students with Issues:');
         targetSheet.getRange(summaryRow + 3, 2).setValue(issueAttendees.size);
 
-        // Reported Students = distinct attendees on this sheet (retained per prior definition)
+        // Reported Students = distinct attendees with any row Reported? TRUE
         targetSheet.getRange(summaryRow + 4, 1).setValue('Reported Students:');
-        targetSheet.getRange(summaryRow + 4, 2).setValue(allAttendees.size);
+        targetSheet.getRange(summaryRow + 4, 2).setValue(reportedAttendees.size);
+
+        // Report Last Updated row (bold)
+        targetSheet.getRange(summaryRow + 5, 1, 1, 2)
+          .setValues([['Report Last Updated:', syncTimestampStr]])
+          .setFontWeight('bold');
 
         // Keep columns auto-sized so headers are readable
         for (let pass = 0; pass < 2; pass++) {
