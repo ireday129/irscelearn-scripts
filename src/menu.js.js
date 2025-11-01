@@ -26,31 +26,26 @@ function onOpen(e) {
   const menu = ui.createMenu('IRS CE Tools');
 
   menu
-    .addItem('Build Clean Upload (resumable)', 'menu_buildCleanUpload')
+    .addItem('Build Clean Upload', 'menu_buildCleanUpload')
     .addItem('Recheck Master for Issues', 'menu_recheckMaster')
-    .addSeparator()
-    .addItem('Create Nightly Clean Trigger', 'menu_createNightlyClean')
-    .addItem('Remove Nightly Clean Trigger', 'menu_removeNightlyClean')
-    .addItem('Create Nightly Group Sync Trigger', 'menu_createNightlyGroupSync')
-    .addItem('Remove Nightly Group Sync Trigger', 'menu_removeNightlyGroupSync')
     .addSeparator()
     .addItem('Mark Clean as Reported (resumable)', 'menu_markCleanAsReported')
     .addItem('Export Clean as XLSX', 'menu_exportCleanToXlsx')
     .addSeparator()
-    .addItem('Sync Group Sheets (strict)', 'menu_syncGroupSheets')
+    .addItem('Sync Group Sheets', 'menu_syncGroupSheets')
     .addItem('Diagnose Group Sync', 'menu_diagnoseGroupSync')
     .addSeparator()
     .addItem('Ingest System Reporting Issues', 'menu_ingestSystemReportingIssues')
-    .addItem('Apply Reporting Fixes (manual)', 'menu_applyReportingFixes')
+    .addItem('Apply Reporting Fixes', 'menu_applyReportingFixes')
     .addSeparator()
     .addItem('Update Reporting Stats', 'menu_updateReportingStats')
     .addItem('Sync Reported Hours → Master', 'menu_syncReportedToMaster')
     .addSeparator()
     .addItem('Deduplicate Roster by Email', 'menu_dedupeRosterByEmail')
-    .addItem('Backfill Roster from Master (Reported only)', 'menu_backfillRosterFromMasterReported')
+    .addItem('Backfill Roster from Master', 'menu_backfillRosterFromMasterReported')
     .addItem('Update Roster Validity from Issues', 'menu_updateRosterValidityFromIssues')
     .addSeparator()
-    .addItem('Create/Repair Tabs (Clean & Issues only)', 'menu_ensureAllTabs')
+    .addItem('Create/Repair Tabs', 'menu_ensureAllTabs')
     .addSeparator()
     .addItem('Diagnostics (Log all systems)', 'menu_runDiagnostics')
     .addItem('Highlight Roster from Reported Hours', 'menu_highlightRosterFromReportedHours');
@@ -89,18 +84,6 @@ function menu_buildCleanUpload() {
 }
 function menu_recheckMaster() {
   return safeCall_('recheckMaster', (typeof recheckMaster === 'function') ? recheckMaster : null);
-}
-function menu_createNightlyClean() {
-  return safeCall_('createNightlyTrigger', (typeof createNightlyTrigger === 'function') ? createNightlyTrigger : null);
-}
-function menu_removeNightlyClean() {
-  return safeCall_('removeNightlyTrigger', (typeof removeNightlyTrigger === 'function') ? removeNightlyTrigger : null);
-}
-function menu_createNightlyGroupSync() {
-  return safeCall_('createNightlyGroupSyncTrigger', (typeof createNightlyGroupSyncTrigger === 'function') ? createNightlyGroupSyncTrigger : null);
-}
-function menu_removeNightlyGroupSync() {
-  return safeCall_('removeNightlyGroupSyncTrigger', (typeof removeNightlyGroupSyncTrigger === 'function') ? removeNightlyGroupSyncTrigger : null);
 }
 function menu_markCleanAsReported() {
   return safeCall_('markCleanAsReported', (typeof markCleanAsReported === 'function') ? markCleanAsReported : null);
@@ -179,10 +162,6 @@ function menu_highlightRosterFromReportedHours() {
 this.onOpen = onOpen;
 this.menu_buildCleanUpload = menu_buildCleanUpload;
 this.menu_recheckMaster = menu_recheckMaster;
-this.menu_createNightlyClean = menu_createNightlyClean;
-this.menu_removeNightlyClean = menu_removeNightlyClean;
-this.menu_createNightlyGroupSync = menu_createNightlyGroupSync;
-this.menu_removeNightlyGroupSync = menu_removeNightlyGroupSync;
 this.menu_markCleanAsReported = menu_markCleanAsReported;
 this.menu_exportCleanToXlsx = menu_exportCleanToXlsx;
 this.menu_syncGroupSheets = menu_syncGroupSheets;
