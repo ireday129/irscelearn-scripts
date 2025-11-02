@@ -148,6 +148,7 @@ function syncGroupSheetsStrict() {
       return;
     }
     const targetSheet = targetSS.getSheets()[0]; // convention: first sheet
+    // NOTE: We do not modify the header row (row 1) in any way: no wrap changes, no protection edits, no header color tweaks.
     if (!targetSheet) {
       Logger.log(`Group "${gName}": no sheets found in target spreadsheet.`);
       return;
@@ -232,41 +233,19 @@ function syncGroupSheetsStrict() {
 
       // ===== Enhancements for group sheets =====
 
-      // 1) Freeze + protect the header row (use RANGE.protect to avoid sheet↔range mismatch)
-      try {
-        targetSheet.setFrozenRows(1);
-
-        // Remove any existing Range protections that exactly cover row 1 (header)
-        (targetSheet.getProtections(SpreadsheetApp.ProtectionType.RANGE) || []).forEach(p => {
-          const r = p.getRange && p.getRange();
-          if (r && r.getRow() === 1 && r.getNumRows() === 1) p.remove();
-        });
-
-        // Create a RANGE protection directly on the header row
-        const headerRange = targetSheet.getRange(1, 1, 1, lastCol);
-        const headerProt  = headerRange.protect().setDescription('Protect header row');
-        headerProt.removeEditors(headerProt.getEditors()); // keep only owner
-        // Optional: allow viewers/editors to see warning instead of hard block
-        // headerProt.setWarningOnly(true);
-      } catch (e) {
-        Logger.log('Header protect failed (non-fatal): ' + e.message);
-      }
-
       // 2) Alternating row banding (neutral) — use RANGE.applyRowBanding
       try {
         (targetSheet.getBandings() || []).forEach(b => b.remove());
-        const bandRange = targetSheet.getRange(1, 1, Math.max(targetSheet.getLastRow(), 2), lastCol);
+        const bandRange = targetSheet.getRange(2, 1, Math.max(targetSheet.getLastRow()-1, 1), lastCol);
         const band = bandRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY);
-        band.setHeaderRowColor(null);
       } catch (e) {
         Logger.log('Banding failed (non-fatal): ' + e.message);
       }
 
       // 3) Auto-size columns + enforce sane formats
       try {
-        // Turn off wrapping on header and data so widths reflect full titles/content
+        // Turn off wrapping on data so widths reflect content
         const dataLastRow = Math.max(out.length, 1);
-        targetSheet.getRange(1, 1, 1, lastCol).setWrap(false);
         if (dataLastRow > 0) {
           targetSheet.getRange(2, 1, dataLastRow, lastCol).setWrap(false);
         }
