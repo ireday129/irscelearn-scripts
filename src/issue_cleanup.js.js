@@ -25,10 +25,14 @@ function applyReportingIssueValidationAndFormatting_() {
   if (master && master.getLastRow() >= 1) {
     const mh = master.getRange(1,1,1, master.getLastColumn()).getValues()[0].map(s=>String(s||'').trim());
     const iRI = mh.indexOf(CFG.COL_HEADERS.masterIssueCol);
+    const iRep = mh.indexOf(CFG.COL_HEADERS.reportedCol);
     if (iRI >= 0) {
       const range = master.getRange(2, iRI+1, Math.max(master.getMaxRows()-1,1), 1);
       setDropdown_(range, choices, false);
       setIssueColors_(master, iRI+1);
+    }
+    if (iRep >= 0) {
+      setReportedCheckboxColors_(master, iRep + 1);
     }
   }
 }
@@ -78,7 +82,12 @@ function setIssueColors_(sheet, colIdx1) {
 
   const add = (text, bg, fg) => rules.push(
     SpreadsheetApp.newConditionalFormatRule()
-      .whenTextEqualTo(text).setBackground(bg).setFontColor(fg).setRanges([rng]).build()
+      .whenTextEqualTo(text)
+      .setBackground(bg)
+      .setFontColor(fg)
+      .setBold(true)
+      .setRanges([rng])
+      .build()
   );
 
   choices.forEach(issueText => {
@@ -88,6 +97,40 @@ function setIssueColors_(sheet, colIdx1) {
     }
   });
 
+  sheet.setConditionalFormatRules(rules);
+}
+
+/**
+ * Add conditional formatting for a checkbox column so that TRUE values
+ * show with a green checkmark. Background is left unchanged.
+ *
+ * @param {Sheet} sheet
+ * @param {number} colIdx1 1-based column index of the Reported? column
+ */
+function setReportedCheckboxColors_(sheet, colIdx1) {
+  const lastRow = Math.max(sheet.getLastRow(), 2);
+  const numRows = lastRow - 1;
+  if (numRows <= 0) return;
+
+  const colRange = sheet.getRange(2, colIdx1, numRows, 1);
+
+  // Preserve other rules; drop any that directly target this column starting at row 2
+  const existing = sheet.getConditionalFormatRules() || [];
+  const rules = existing.filter(r => {
+    const rs = r.getRanges();
+    if (!rs || !rs.length) return true;
+    const first = rs[0];
+    return !(first.getColumn() === colIdx1 && first.getRow() === 2);
+  });
+
+  // Use a formula that refers to the cell itself so the rule is reusable down the column.
+  const greenCheckRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied('=INDIRECT(ADDRESS(ROW(), COLUMN()))=TRUE')
+    .setFontColor('#1e8e3e') // green checkmark
+    .setRanges([colRange])
+    .build();
+
+  rules.push(greenCheckRule);
   sheet.setConditionalFormatRules(rules);
 }
 
