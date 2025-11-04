@@ -39,6 +39,7 @@ const CFG = {
     'PTIN does not exist',
     'PTIN & name do not match',
     'Missing PTIN',
+    'Updated',
     'Other'
   ],
 

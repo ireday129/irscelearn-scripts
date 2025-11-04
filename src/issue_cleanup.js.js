@@ -66,35 +66,46 @@ function setIssueColors_(sheet, colIdx1) {
   if (choices.length === 0) return;
 
   const last = Math.max(sheet.getLastRow(), 2);
-  const rng = sheet.getRange(2, colIdx1, last-1, 1);
-  const rules = sheet.getConditionalFormatRules().filter(r=>{
+  const rng = sheet.getRange(2, colIdx1, last - 1, 1);
+
+  // Keep any existing CF rules that are NOT on this column
+  const existing = sheet.getConditionalFormatRules() || [];
+  const rules = existing.filter(r => {
     const rs = r.getRanges();
-    // Filter out existing rules on this column index
-    return !(rs && rs.length && rs[0].getColumn()===colIdx1);
+    if (!rs || !rs.length) return true;
+    const first = rs[0];
+    return first.getColumn() !== colIdx1;
   });
 
+  // Color map, including "Updated"
   const colorMap = {
-    'PTIN does not exist': { bg: '#2196f3', fg: '#ffffff' }, // Blue
-    'PTIN & name do not match': { bg: '#f44336', fg: '#ffffff' }, // Red
-    'Missing PTIN': { bg: '#ffeb3b', fg: '#000000' }, // Yellow
-    'Other': { bg: '#9e9e9e', fg: '#000000' } // Grey
+    'PTIN does not exist':      { bg: '#2196f3', fg: '#ffffff', bold: true  }, // Blue
+    'PTIN & name do not match': { bg: '#f44336', fg: '#ffffff', bold: true  }, // Red
+    'Missing PTIN':             { bg: '#ffeb3b', fg: '#000000', bold: true  }, // Yellow
+    'Updated':                  { bg: '#C8E6C9', fg: '#000000', bold: true  }, // Light green, treated as a handled status
+    'Other':                    { bg: '#9e9e9e', fg: '#000000', bold: true  }  // Grey
   };
 
-  const add = (text, bg, fg) => rules.push(
-    SpreadsheetApp.newConditionalFormatRule()
+  const addRule = (text, cfg) => {
+    let builder = SpreadsheetApp.newConditionalFormatRule()
       .whenTextEqualTo(text)
-      .setBackground(bg)
-      .setFontColor(fg)
-      .setBold(true)
-      .setRanges([rng])
-      .build()
-  );
+      .setBackground(cfg.bg)
+      .setFontColor(cfg.fg);
+
+    if (cfg.bold) {
+      builder = builder.setBold(true);
+    }
+
+    rules.push(
+      builder
+        .setRanges([rng])
+        .build()
+    );
+  };
 
   choices.forEach(issueText => {
-    const mapEntry = colorMap[issueText];
-    if (mapEntry) {
-      add(issueText, mapEntry.bg, mapEntry.fg);
-    }
+    const cfg = colorMap[issueText];
+    if (cfg) addRule(issueText, cfg);
   });
 
   sheet.setConditionalFormatRules(rules);
