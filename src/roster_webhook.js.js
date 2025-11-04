@@ -133,6 +133,7 @@ function onEditRosterWebhook(e) {
     const first = String(vals[map.first] || '').trim();
     const last  = String(vals[map.last]  || '').trim();
     const email = String(vals[map.email] || '').toLowerCase().trim();
+    const ptin  = map.ptin >= 0 ? formatPtinP0_(vals[map.ptin] || '') : '';
 
     if (!email) {
       toast_('Valid? marked TRUE but Email is blank → webhook skipped.', true);
@@ -140,7 +141,7 @@ function onEditRosterWebhook(e) {
     }
 
     // POST webhook
-    sendRosterValidWebhook_(email, first, last);
+    sendRosterValidWebhook_(email, first, last, ptin);
     toast_(`Webhook queued for ${email}`);
 
     // Optional: reset row background to white when Valid? is checked
@@ -188,11 +189,12 @@ function onEditRosterWebhook(e) {
 /**
  * Helper to POST the webhook payload
  */
-function sendRosterValidWebhook_(email, first, last) {
+function sendRosterValidWebhook_(email, first, last, ptin) {
   const payload = {
     email: email,
     first_name: first,
-    last_name: last
+    last_name: last,
+    ptin: ptin || ''
   };
   const options = {
     method: "post",
@@ -224,9 +226,10 @@ function triggerRosterValidWebhookMaybe() {
     const first = String(vals[map.first] || '').trim();
     const last  = String(vals[map.last]  || '').trim();
     const email = String(vals[map.email] || '').toLowerCase().trim();
+    const ptin  = map.ptin >= 0 ? formatPtinP0_(vals[map.ptin] || '') : '';
 
     if (!email) { toast_('Selected row has no Email.', true); return; }
-    sendRosterValidWebhook_(email, first, last);
+    sendRosterValidWebhook_(email, first, last, ptin);
     toast_(`Manual webhook sent for ${email}`);
   } catch (e) {
     toast_('Manual webhook failed: ' + e.message, true);
