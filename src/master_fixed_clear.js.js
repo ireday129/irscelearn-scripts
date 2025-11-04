@@ -23,6 +23,7 @@ function processMasterEdits(e){
     const FIXED_COL_INDEX = 12;      // Column L
     const REPORTED_COL_INDEX = 9;    // Column I (Based on standard Master layout)
     const ISSUE_COL_INDEX = mMap.masterIssueCol != null ? mMap.masterIssueCol + 1 : 10; // Fallback to J=10
+    const REPORTED_AT_COL_INDEX = mMap.reportedAtCol != null ? mMap.reportedAtCol + 1 : null;
 
     
     // 1. FIXED? Check (Column L = 12): If FIXED is checked, clear Reporting Issue? (Column J)
@@ -37,6 +38,30 @@ function processMasterEdits(e){
         // Set the Fixed? column in the same row to FALSE
         sh.getRange(e.range.getRow(), FIXED_COL_INDEX).setValue(false);
         toast_('Fixed? status cleared by marking row Reported.', false);
+    }
+
+    // 3. Reporting Issue? set to "Updated": auto-check Fixed? (optionally only if Reported At is blank)
+    if (col === ISSUE_COL_INDEX) {
+      const issueVal = String(newVal || '').trim().toLowerCase();
+      if (issueVal === 'updated') {
+        const rowIndex = e.range.getRow();
+
+        // Check if Reported At is blank (if we know that column)
+        let reportedAtBlank = true;
+        if (REPORTED_AT_COL_INDEX != null) {
+          const reportedAtVal = sh.getRange(rowIndex, REPORTED_AT_COL_INDEX).getValue();
+          reportedAtBlank = !reportedAtVal;
+        }
+
+        if (reportedAtBlank) {
+          const fixedCell = sh.getRange(rowIndex, FIXED_COL_INDEX);
+          const currentFixed = fixedCell.getValue();
+          if (!parseBool_(currentFixed)) {
+            fixedCell.setValue(true);
+            toast_('Fixed? set because Reporting Issue? was marked Updated.', false);
+          }
+        }
+      }
     }
 
     // --- 3. Roster Valid? Check (Placeholder for other onEdit logic) ---
