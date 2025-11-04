@@ -370,3 +370,52 @@ function parseBool_(val) {
 function truthy_(val) {
   return parseBool_(val);
 }
+
+/**
+ * One-time fixer: normalize texty booleans (like `'TRUE`) into real TRUE/FALSE.
+ * - sheetName: name of the sheet to fix (e.g. CFG.SHEET_MASTER)
+ * - headerLabel: column header of the boolean column (e.g. 'Fixed?', 'Reported?', 'Valid?')
+ *
+ * Usage from the Script Editor:
+ *   normalizeBooleanColumn_('Master', 'Fixed?');
+ *   normalizeBooleanColumn_('Reporting Issue(s)', 'Fixed?');
+ */
+function normalizeBooleanColumn_(sheetName, headerLabel) {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(sheetName);
+  if (!sh) {
+    toast_('normalizeBooleanColumn_: sheet "' + sheetName + '" not found.', true);
+    return;
+  }
+
+  const lastRow = sh.getLastRow();
+  if (lastRow <= 1) return; // no data rows
+
+  const hdr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(h => String(h || '').trim());
+  const colIndex = hdr.map(h => h.toLowerCase()).indexOf(String(headerLabel || '').toLowerCase().trim());
+  if (colIndex < 0) {
+    toast_('normalizeBooleanColumn_: header "' + headerLabel + '" not found on "' + sheetName + '".', true);
+    return;
+  }
+
+  const rng = sh.getRange(2, colIndex + 1, lastRow - 1, 1);
+  const vals = rng.getValues();
+  let changed = 0;
+
+  for (let r = 0; r < vals.length; r++) {
+    const raw = vals[r][0];
+    const bool = parseBool_(raw);
+    if (bool !== raw && (bool === true || bool === false)) {
+      vals[r][0] = bool;
+      changed++;
+    }
+  }
+
+  if (changed) {
+    rng.setValues(vals);
+    toast_('normalizeBooleanColumn_: converted ' + changed + ' cell(s) in "' + sheetName + '" → real booleans.');
+  } else {
+    toast_('normalizeBooleanColumn_: no texty booleans to normalize in "' + sheetName + '".');
+  }
+}
