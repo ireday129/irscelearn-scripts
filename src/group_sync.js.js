@@ -535,9 +535,12 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
     }
   }
   const dataRowCount = Math.max(dataLastRow - 1, 0); // data rows start at row 2
+  if (dataRowCount <= 0) return;
 
   // Read header
-  const hdr = targetSheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => String(v || '').trim());
+  const hdr = targetSheet.getRange(1, 1, 1, lastCol)
+    .getValues()[0]
+    .map(v => String(v || '').trim());
   const lower = hdr.map(h => h.toLowerCase());
 
   const iReported = lower.indexOf('reported?');
@@ -545,6 +548,7 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
   const iPtin     = lower.indexOf('attendee ptin');
   let   iHours    = lower.indexOf('ce hours awarded');
   if (iHours < 0) iHours = lower.indexOf('ce hours');
+  const iEmail    = lower.indexOf('email');
 
   // Start from existing rules but drop any that target the Reported?/Issue? columns
   const existing = targetSheet.getConditionalFormatRules();
@@ -557,28 +561,55 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
     });
   });
 
-  // ----- Reported? column: checkboxes, white background -----
-  if (iReported >= 0 && dataRowCount > 0) {
-    const repRange = targetSheet.getRange(2, iReported + 1, dataRowCount, 1);
+  // ----- Reported? column: checkboxes only where Email is present, white background -----
+  if (iReported >= 0) {
+    const startRow = 2;
+    const repCol = iReported + 1;
 
-    // Ensure checkboxes exist
-    try {
-      repRange.insertCheckboxes();
-    } catch (e) {
-      // If they’re already checkboxes, this can throw; ignore
+    // Clear any old data validation (including in summary block)
+    if (lastRow >= startRow) {
+      targetSheet.getRange(startRow, repCol, lastRow - 1, 1).clearDataValidations();
     }
 
-    // Make sure background is white (no banding color leaks)
-    repRange.setBackground('#ffffff');
+    if (iEmail >= 0 && dataRowCount > 0) {
+      const emailRange = targetSheet.getRange(startRow, iEmail + 1, dataRowCount, 1);
+      const emailVals = emailRange.getValues();
 
-    // Make TRUE checkboxes show a green check (via font color)
+      for (let r = 0; r < dataRowCount; r++) {
+        const email = String(emailVals[r][0] || '').trim();
+        const cell = targetSheet.getRange(startRow + r, repCol);
+        if (email) {
+          // Only rows with an Email get a checkbox
+          try {
+            cell.insertCheckboxes();
+          } catch (e) {
+            // ignore if already checkboxes
+          }
+          cell.setBackground('#ffffff');
+        } else {
+          // No email -> no checkbox
+          cell.clearContent();
+          cell.setBackground('#ffffff');
+        }
+      }
+    } else if (dataRowCount > 0) {
+      // Fallback: if we somehow don't have an Email column, at least confine checkboxes to data rows
+      const repRangeData = targetSheet.getRange(startRow, repCol, dataRowCount, 1);
+      try {
+        repRangeData.insertCheckboxes();
+      } catch (e) {}
+      repRangeData.setBackground('#ffffff');
+    }
+
+    // Make TRUE checkboxes show a green-ish check via font color, only on data rows
     try {
-      const repColA1 = colToA1_(iReported + 1);
+      const repColA1 = colToA1_(repCol);
+      const repDataRange = targetSheet.getRange(startRow, repCol, dataRowCount, 1);
       rules.push(
         SpreadsheetApp.newConditionalFormatRule()
-          .whenFormulaSatisfied(`=$${repColA1}2=TRUE`)
+          .whenFormulaSatisfied(`=$${repColA1}${startRow}=TRUE`)
           .setFontColor('#00b050')
-          .setRanges([repRange])
+          .setRanges([repDataRange])
           .build()
       );
     } catch (e) {
@@ -590,7 +621,6 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
   if (iIssue >= 0 && dataRowCount > 0) {
     const issueRange = targetSheet.getRange(2, iIssue + 1, dataRowCount, 1);
 
-    // Color map copied from Master logic
     const colorMap = {
       'PTIN does not exist':      { bg: '#2196f3', fg: '#ffffff' }, // Blue
       'PTIN & name do not match': { bg: '#f44336', fg: '#ffffff' }, // Red
@@ -612,7 +642,7 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
     });
   }
 
-  // Center alignment for PTIN, Hours, and Issue columns
+  // Center alignment for PTIN, Hours, and Issue columns (data rows only)
   if (dataRowCount > 0) {
     if (iPtin >= 0) {
       targetSheet.getRange(2, iPtin + 1, dataRowCount, 1).setHorizontalAlignment('center');
