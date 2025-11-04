@@ -283,67 +283,74 @@ function syncGroupSheetsStrict() {
       // Force white background for all data rows we just wrote
       targetSheet.getRange(2, 1, out.length, lastCol).setBackground('#ffffff');
 
-      // --- Conditional formatting: yellow rows for issues, green/grey checkboxes for Reported? ---
+      // --- Direct formatting for Issue rows and Reported? checkboxes (no CF) ---
       try {
-        // Be tolerant of slight header variations ("Reporting Issue" vs "Reporting Issue?")
-        const findIssueCol = () => {
-          let idx = lower.indexOf('reporting issue?');
-          if (idx < 0) idx = lower.indexOf('reporting issue');
-          return idx;
-        };
-        // And "Reported?" vs "Reported"
-        const findReportedCol = () => {
-          let idx = lower.indexOf('reported?');
-          if (idx < 0) idx = lower.indexOf('reported');
-          return idx;
-        };
+        const numRows = out.length;
+        if (numRows > 0) {
+          const bodyRange = targetSheet.getRange(2, 1, numRows, lastCol);
 
-        const iIssue    = findIssueCol();
-        const iReported = findReportedCol();
+          // Base: force all data rows to white background
+          bodyRange.setBackground('#ffffff');
 
-        const dataRange = targetSheet.getRange(2, 1, Math.max(out.length, 1), lastCol);
+          // Snapshot existing backgrounds and font weights so we can selectively tweak
+          const bg = bodyRange.getBackgrounds();
+          const fonts = bodyRange.getFontWeights();
 
-        // Start with a clean slate: wipe all prior conditional formatting rules
-        const rules = [];
+          // Helper: find issue / reported columns (tolerant of header variants)
+          const findIssueCol = () => {
+            let idx = lower.indexOf('reporting issue?');
+            if (idx < 0) idx = lower.indexOf('reporting issue');
+            return idx;
+          };
+          const findReportedCol = () => {
+            let idx = lower.indexOf('reported?');
+            if (idx < 0) idx = lower.indexOf('reported');
+            return idx;
+          };
 
-        // 1) Any row with a nonblank Reporting Issue? -> yellow row + bold text
-        if (iIssue >= 0) {
-          const issueColLetter = colToA1_(iIssue + 1);
-          const issueRule = SpreadsheetApp.newConditionalFormatRule()
-            .whenFormulaSatisfied(`=LEN($${issueColLetter}2)>0`)
-            .setBackground('#fff59d')   // light yellow
-            .setFontWeight('bold')
-            .setRanges([dataRange])     // whole row range
-            .build();
-          rules.push(issueRule);
+          const iIssueCol    = findIssueCol();
+          const iReportedCol = findReportedCol();
+
+          // 1) Yellow + bold for any row with a nonblank Reporting Issue
+          if (iIssueCol >= 0) {
+            const issueRange = targetSheet.getRange(2, iIssueCol + 1, numRows, 1);
+            const issueVals = issueRange.getValues();
+
+            for (let r = 0; r < numRows; r++) {
+              const hasIssue = String(issueVals[r][0] || '').trim() !== '';
+              if (hasIssue) {
+                for (let c = 0; c < lastCol; c++) {
+                  bg[r][c] = '#fff59d'; // light yellow
+                  fonts[r][c] = 'bold';
+                }
+              }
+            }
+          }
+
+          // 2) Green/grey coloring for Reported? checkboxes, with white background
+          if (iReportedCol >= 0) {
+            const repRange = targetSheet.getRange(2, iReportedCol + 1, numRows, 1);
+            const repVals = repRange.getValues();
+            const repColors = [];
+
+            for (let r = 0; r < numRows; r++) {
+              const v = repVals[r][0];
+              const isTrue = truthy_(v);
+              // Green for TRUE, grey for FALSE/blank
+              repColors.push([isTrue ? '#1e8e3e' : '#9e9e9e']);
+            }
+
+            // Ensure checkbox cells themselves have white background
+            repRange.setBackground('#ffffff');
+            repRange.setFontColors(repColors);
+          }
+
+          // Apply the updated backgrounds and font weights for the whole body
+          bodyRange.setBackgrounds(bg);
+          bodyRange.setFontWeights(fonts);
         }
-
-        // 2) Reported? TRUE -> white background + green check
-        //    Reported? FALSE -> white background + grey empty box
-        if (iReported >= 0) {
-          const repColLetter = colToA1_(iReported + 1);
-          const repRange     = targetSheet.getRange(2, iReported + 1, Math.max(out.length, 1), 1);
-
-          const reportedTrue = SpreadsheetApp.newConditionalFormatRule()
-            .whenFormulaSatisfied(`=$${repColLetter}2=TRUE`)
-            .setBackground('#ffffff')
-            .setFontColor('#1e8e3e')   // green checkmark
-            .setRanges([repRange])
-            .build();
-          rules.push(reportedTrue);
-
-          const reportedFalse = SpreadsheetApp.newConditionalFormatRule()
-            .whenFormulaSatisfied(`=$${repColLetter}2=FALSE`)
-            .setBackground('#ffffff')
-            .setFontColor('#9e9e9e')   // grey box
-            .setRanges([repRange])
-            .build();
-          rules.push(reportedFalse);
-        }
-
-        targetSheet.setConditionalFormatRules(rules);
       } catch (e) {
-        Logger.log('Conditional-format reset failed (non-fatal): ' + e.message);
+        Logger.log('Direct formatting for issues/reported failed (non-fatal): ' + e.message);
       }
 
       // 6) Duplicate guard (same Attendee PTIN + Program Name) highlighted light red
