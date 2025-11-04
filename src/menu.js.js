@@ -15,6 +15,7 @@
 /* global updateRosterValidityFromIssues_, ensureAllTabs */
 /* global backfillRosterFromMasterReported_ */
 /* global highlightRosterFromReportedHours */
+/* global updateMasterFromRoster_ */
 
 /**
  * IRS CE TOOLS MAIN MENU
@@ -29,7 +30,7 @@ function onOpen(e) {
     .addItem('Build Clean Upload', 'menu_buildCleanUpload')
     .addItem('Recheck Master for Issues', 'menu_recheckMaster')
     .addSeparator()
-    .addItem('Mark Clean as Reported (resumable)', 'menu_markCleanAsReported')
+    .addItem('Mark Clean as Reported', 'menu_markCleanAsReported')
     .addItem('Export Clean as XLSX', 'menu_exportCleanToXlsx')
     .addSeparator()
     .addItem('Sync Group Sheets', 'menu_syncGroupSheets')
@@ -37,17 +38,19 @@ function onOpen(e) {
     .addSeparator()
     .addItem('Ingest System Reporting Issues', 'menu_ingestSystemReportingIssues')
     .addItem('Apply Reporting Fixes', 'menu_applyReportingFixes')
+    .addItem('Apply Reporting Issue Validation', 'menu_applyReportingIssueValidation')
     .addSeparator()
     .addItem('Update Reporting Stats', 'menu_updateReportingStats')
     .addItem('Sync Reported Hours → Master', 'menu_syncReportedToMaster')
     .addSeparator()
     .addItem('Deduplicate Roster by Email', 'menu_dedupeRosterByEmail')
     .addItem('Backfill Roster from Master', 'menu_backfillRosterFromMasterReported')
+    .addItem('Update Master from Roster', 'menu_updateMasterFromRoster')
     .addItem('Update Roster Validity from Issues', 'menu_updateRosterValidityFromIssues')
     .addSeparator()
     .addItem('Create/Repair Tabs', 'menu_ensureAllTabs')
     .addSeparator()
-    .addItem('Diagnostics (Log all systems)', 'menu_runDiagnostics')
+    .addItem('Diagnostics – Log all systems', 'menu_runDiagnostics')
     .addItem('Highlight Roster from Reported Hours', 'menu_highlightRosterFromReportedHours');
 
   menu.addToUi();
@@ -107,6 +110,12 @@ function menu_ingestSystemReportingIssues() {
 function menu_applyReportingFixes() {
   return safeCall_('applyReportingFixes', (typeof applyReportingFixes === 'function') ? applyReportingFixes : null);
 }
+function menu_applyReportingIssueValidation() {
+  return safeCall_(
+    'applyReportingIssueValidationAndFormatting_',
+    (typeof applyReportingIssueValidationAndFormatting_ === 'function') ? applyReportingIssueValidationAndFormatting_ : null
+  );
+}
 function menu_updateReportingStats() {
   return safeCall_('updateProgramReportedTotals', (typeof updateProgramReportedTotals === 'function') ? updateProgramReportedTotals : null);
 }
@@ -120,6 +129,12 @@ function menu_backfillRosterFromMasterReported() {
   return safeCall_(
     'backfillRosterFromMasterReported_',
     (typeof backfillRosterFromMasterReported_ === 'function') ? backfillRosterFromMasterReported_ : null
+  );
+}
+function menu_updateMasterFromRoster() {
+  return safeCall_(
+    'updateMasterFromRoster_',
+    (typeof updateMasterFromRoster_ === 'function') ? updateMasterFromRoster_ : null
   );
 }
 function menu_updateRosterValidityFromIssues() {
@@ -168,10 +183,12 @@ this.menu_syncGroupSheets = menu_syncGroupSheets;
 this.menu_diagnoseGroupSync = menu_diagnoseGroupSync;
 this.menu_ingestSystemReportingIssues = menu_ingestSystemReportingIssues;
 this.menu_applyReportingFixes = menu_applyReportingFixes;
+this.menu_applyReportingIssueValidation = menu_applyReportingIssueValidation;
 this.menu_updateReportingStats = menu_updateReportingStats;
 this.menu_syncReportedToMaster = menu_syncReportedToMaster;
 this.menu_dedupeRosterByEmail = menu_dedupeRosterByEmail;
 this.menu_backfillRosterFromMasterReported = menu_backfillRosterFromMasterReported;
+this.menu_updateMasterFromRoster = menu_updateMasterFromRoster;
 this.menu_updateRosterValidityFromIssues = menu_updateRosterValidityFromIssues;
 this.menu_ensureAllTabs = menu_ensureAllTabs;
 this.menu_runDiagnostics = menu_runDiagnostics;
