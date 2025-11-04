@@ -220,6 +220,12 @@ function syncGroupSheetsStrict() {
     if (out.length) {
       targetSheet.getRange(2,1,out.length, lastCol).setValues(out);
 
+      // Draw a medium border around the data region (rows from Master only)
+      if (out.length > 0) {
+        const dataRange = targetSheet.getRange(2, 1, out.length, lastCol);
+        dataRange.setBorder(true, true, true, true, false, false, null, SpreadsheetApp.BorderStyle.MEDIUM);
+      }
+
       // Enforce checkbox on Reported? column
       const iRep = lower.indexOf('reported?');
       if (iRep >= 0) {
@@ -515,6 +521,21 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
   const lastCol = targetSheet.getLastColumn();
   if (lastRow < 2 || lastCol < 1) return; // nothing to format
 
+  // Determine how many rows are data rows (exclude Summary block and below)
+  let dataLastRow = lastRow;
+  if (lastRow > 1) {
+    const colA = targetSheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (let i = 0; i < colA.length; i++) {
+      const v = String(colA[i][0] || '').trim().toLowerCase();
+      if (v === 'summary') {
+        const summaryRow = 2 + i; // actual sheet row where "Summary" lives
+        dataLastRow = summaryRow - 2; // last data row (one row above the blank before Summary)
+        break;
+      }
+    }
+  }
+  const dataRowCount = Math.max(dataLastRow - 1, 0); // data rows start at row 2
+
   // Read header
   const hdr = targetSheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => String(v || '').trim());
   const lower = hdr.map(h => h.toLowerCase());
@@ -537,8 +558,8 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
   });
 
   // ----- Reported? column: checkboxes, white background -----
-  if (iReported >= 0 && lastRow > 1) {
-    const repRange = targetSheet.getRange(2, iReported + 1, lastRow - 1, 1);
+  if (iReported >= 0 && dataRowCount > 0) {
+    const repRange = targetSheet.getRange(2, iReported + 1, dataRowCount, 1);
 
     // Ensure checkboxes exist
     try {
@@ -566,8 +587,8 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
   }
 
   // ----- Reporting Issue? column: colors + bold text -----
-  if (iIssue >= 0 && lastRow > 1) {
-    const issueRange = targetSheet.getRange(2, iIssue + 1, lastRow - 1, 1);
+  if (iIssue >= 0 && dataRowCount > 0) {
+    const issueRange = targetSheet.getRange(2, iIssue + 1, dataRowCount, 1);
 
     // Color map copied from Master logic
     const colorMap = {
@@ -592,15 +613,15 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
   }
 
   // Center alignment for PTIN, Hours, and Issue columns
-  if (lastRow > 1) {
+  if (dataRowCount > 0) {
     if (iPtin >= 0) {
-      targetSheet.getRange(2, iPtin + 1, lastRow - 1, 1).setHorizontalAlignment('center');
+      targetSheet.getRange(2, iPtin + 1, dataRowCount, 1).setHorizontalAlignment('center');
     }
     if (iHours >= 0) {
-      targetSheet.getRange(2, iHours + 1, lastRow - 1, 1).setHorizontalAlignment('center');
+      targetSheet.getRange(2, iHours + 1, dataRowCount, 1).setHorizontalAlignment('center');
     }
     if (iIssue >= 0) {
-      targetSheet.getRange(2, iIssue + 1, lastRow - 1, 1).setHorizontalAlignment('center');
+      targetSheet.getRange(2, iIssue + 1, dataRowCount, 1).setHorizontalAlignment('center');
     }
   }
 
