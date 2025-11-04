@@ -148,7 +148,7 @@ function syncGroupSheetsStrict() {
       return;
     }
     const targetSheet = targetSS.getSheets()[0]; // convention: first sheet
-    // NOTE: We do not modify the header row (row 1) in any way: no wrap changes, no protection edits, no header color tweaks.
+    // NOTE: We do not modify the header row (row 1) in any way.
     if (!targetSheet) {
       Logger.log(`Group "${gName}": no sheets found in target spreadsheet.`);
       return;
@@ -208,10 +208,14 @@ function syncGroupSheetsStrict() {
       out.push(arr);
     });
 
-    // Clear body & write
+    // Clear body (content + formatting) but leave header row (row 1) alone
     const lastRow = targetSheet.getLastRow();
     const lastCol = targetSheet.getLastColumn();
-    if (lastRow > 1) targetSheet.getRange(2,1,lastRow-1,lastCol).clearContent();
+    if (lastRow > 1) {
+      const bodyRange = targetSheet.getRange(2, 1, lastRow - 1, lastCol);
+      bodyRange.clearContent();
+      bodyRange.clearFormat();
+    }
 
     if (out.length) {
       targetSheet.getRange(2,1,out.length, lastCol).setValues(out);
@@ -222,7 +226,7 @@ function syncGroupSheetsStrict() {
       const iRepAt = lower.indexOf('reported at');
       if (iRepAt >= 0) targetSheet.getRange(2, iRepAt+1, out.length, 1).setNumberFormat('mm/dd/yyyy');
 
-      // NEW: Enforce checkbox on Reported? column
+      // Enforce checkbox on Reported? column
       const iRep = lower.indexOf('reported?');
       if (iRep >= 0) {
         const repRange = targetSheet.getRange(2, iRep+1, Math.max(out.length,1), 1);
@@ -230,39 +234,41 @@ function syncGroupSheetsStrict() {
         repRange.setDataValidation(rule);
       }
 
-
       // ===== Enhancements for group sheets =====
 
-      // 2) Alternating row banding (neutral) — use RANGE.applyRowBanding
+      // 3) Formats only; do not change column widths or wrapping
       try {
-        (targetSheet.getBandings() || []).forEach(b => b.remove());
-        const bandRange = targetSheet.getRange(2, 1, Math.max(targetSheet.getLastRow()-1, 1), lastCol);
-        const band = bandRange.applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY);
-      } catch (e) {
-        Logger.log('Banding failed (non-fatal): ' + e.message);
-      }
-
-      // 3) Auto-size columns + enforce sane formats
-      try {
-        // Turn off wrapping on data so widths reflect content
-        const dataLastRow = Math.max(out.length, 1);
-        if (dataLastRow > 0) {
-          targetSheet.getRange(2, 1, dataLastRow, lastCol).setWrap(false);
-        }
-
-        // Auto-resize all columns (twice helps when formats update lengths)
-        for (let pass = 0; pass < 2; pass++) {
-          for (let c = 1; c <= lastCol; c++) targetSheet.autoResizeColumn(c);
-        }
-
-        // Hours number format (CE Hours Awarded / CE Hours)
+        // Hours number format (CE Hours Awarded / CE Hours) + center alignment
         let iHours = lower.indexOf('ce hours awarded');
         if (iHours < 0) iHours = lower.indexOf('ce hours');
         if (iHours >= 0) {
-          targetSheet.getRange(2, iHours + 1, Math.max(out.length, 1), 1).setNumberFormat('0');
+          targetSheet
+            .getRange(2, iHours + 1, Math.max(out.length, 1), 1)
+            .setNumberFormat('0')
+            .setHorizontalAlignment('center');
         }
       } catch (e) {
-        Logger.log('Autosize/format failed (non-fatal): ' + e.message);
+        Logger.log('Hours format failed (non-fatal): ' + e.message);
+      }
+
+      // NEW: center Attendee PTIN and Reporting Issue? columns
+      try {
+        const iPtinCol  = lower.indexOf('attendee ptin');
+        const iIssueCol = lower.indexOf('reporting issue?');
+
+        if (iPtinCol >= 0) {
+          targetSheet
+            .getRange(2, iPtinCol + 1, Math.max(out.length, 1), 1)
+            .setHorizontalAlignment('center');
+        }
+
+        if (iIssueCol >= 0) {
+          targetSheet
+            .getRange(2, iIssueCol + 1, Math.max(out.length, 1), 1)
+            .setHorizontalAlignment('center');
+        }
+      } catch (e) {
+        Logger.log('Centering PTIN/Issue failed (non-fatal): ' + e.message);
       }
 
       // 4) Filter view on full table
@@ -274,40 +280,68 @@ function syncGroupSheetsStrict() {
         Logger.log('Filter creation failed (non-fatal): ' + e.message);
       }
 
-      // --- Conditional formatting (reset to only our yellow issue rule + new green text rule for Reported?) ---
+      // Force white background for all data rows we just wrote
+      targetSheet.getRange(2, 1, out.length, lastCol).setBackground('#ffffff');
+
+      // --- Conditional formatting: yellow rows for issues, green/grey checkboxes for Reported? ---
       try {
-        const existing = targetSheet.getConditionalFormatRules() || [];
-        const iIssue = lower.indexOf('reporting issue?');
+        const iIssue    = lower.indexOf('reporting issue?');
         const iReported = lower.indexOf('reported?');
-        const newRules = [];
-        // 1) Yellow for nonblank Reporting Issue?
+
+        // Start from existing rules, but drop any that target the Reporting Issue? or Reported? columns
+        let existing = targetSheet.getConditionalFormatRules() || [];
+        const cleaned = [];
+        existing.forEach(r => {
+          const rs = r.getRanges();
+          if (!rs || !rs.length) {
+            cleaned.push(r);
+            return;
+          }
+          const c = rs[0].getColumn();
+          if (c !== (iIssue + 1) && c !== (iReported + 1)) {
+            cleaned.push(r);
+          }
+        });
+
+        const rules = cleaned;
+        const dataRange = targetSheet.getRange(2, 1, Math.max(out.length, 1), lastCol);
+
+        // 1) Any row with a nonblank Reporting Issue? -> yellow row + bold text
         if (iIssue >= 0) {
-          const issueRange = targetSheet.getRange(2, iIssue + 1, Math.max(out.length, 1), 1);
           const issueColLetter = colToA1_(iIssue + 1);
-          const issueFormula = `=LEN($${issueColLetter}${issueRange.getRow()})>0`;
           const issueRule = SpreadsheetApp.newConditionalFormatRule()
-            .whenFormulaSatisfied(issueFormula)
-            .setBackground('#fff59d') // light yellow
-            .setRanges([issueRange])
+            .whenFormulaSatisfied(`=LEN($${issueColLetter}2)>0`)
+            .setBackground('#fff59d')   // light yellow
+            .setFontWeight('bold')
+            .setRanges([dataRange])     // whole row range
             .build();
-          newRules.push(issueRule);
+          rules.push(issueRule);
         }
-        // 2) Green text for Reported? TRUE (background white)
+
+        // 2) Reported? TRUE -> white background + green check
+        //    Reported? FALSE -> white background + grey empty box
         if (iReported >= 0) {
-          const reportedRange = targetSheet.getRange(2, iReported + 1, Math.max(out.length, 1), 1);
-          const reportedColLetter = colToA1_(iReported + 1);
-          const rowStart = reportedRange.getRow();
-          const reportedFormula = `=$${reportedColLetter}${rowStart}=TRUE`;
-          const reportedRule = SpreadsheetApp.newConditionalFormatRule()
-            .whenFormulaSatisfied(reportedFormula)
+          const repColLetter = colToA1_(iReported + 1);
+          const repRange     = targetSheet.getRange(2, iReported + 1, Math.max(out.length, 1), 1);
+
+          const reportedTrue = SpreadsheetApp.newConditionalFormatRule()
+            .whenFormulaSatisfied(`=$${repColLetter}2=TRUE`)
             .setBackground('#ffffff')
-            .setFontColor('#1e8e3e')
-            .setRanges([reportedRange])
+            .setFontColor('#1e8e3e')   // green checkmark
+            .setRanges([repRange])
             .build();
-          newRules.push(reportedRule);
+          rules.push(reportedTrue);
+
+          const reportedFalse = SpreadsheetApp.newConditionalFormatRule()
+            .whenFormulaSatisfied(`=$${repColLetter}2=FALSE`)
+            .setBackground('#ffffff')
+            .setFontColor('#9e9e9e')   // grey box
+            .setRanges([repRange])
+            .build();
+          rules.push(reportedFalse);
         }
-        // Overwrite any prior rules
-        targetSheet.setConditionalFormatRules(newRules);
+
+        targetSheet.setConditionalFormatRules(rules);
       } catch (e) {
         Logger.log('Conditional-format reset failed (non-fatal): ' + e.message);
       }
@@ -345,11 +379,28 @@ function syncGroupSheetsStrict() {
         Logger.log('Email normalize failed (non-fatal): ' + e.message);
       }
 
-      // Shared sync timestamp for summary block
+      // Shared sync timestamp for summary block (this run of group sync) — format to match CE Hours stamp
       const syncTimestamp = new Date();
-      const syncTimestampStr = Utilities.formatDate(syncTimestamp, Session.getScriptTimeZone(), 'MMM d, yyyy h:mm a');
+      const syncTimestampStr = formatEstStamp_(syncTimestamp);
 
-      // 10) Summary block: totals + distinct attendee counts
+      // CE Hours Last Reported: pull the authoritative timestamp from Master!N2
+      // (mark_reported will maintain this cell).
+      let latestRepStr = '';
+      try {
+        const masterSheet = ss.getSheetByName(CFG.SHEET_MASTER);
+        if (masterSheet) {
+          const n2 = masterSheet.getRange('N2').getValue();
+          if (n2 instanceof Date) {
+            latestRepStr = formatEstStamp_(n2);
+          } else if (n2 != null && String(n2).trim() !== '') {
+            latestRepStr = String(n2).trim();
+          }
+        }
+      } catch (e) {
+        Logger.log('Reading Master!N2 failed (non-fatal): ' + e.message);
+      }
+
+      // Summary block: totals + distinct attendee counts
       try {
         const iHours2  = (() => { const x = lower.indexOf('ce hours awarded'); return x >= 0 ? x : lower.indexOf('ce hours'); })();
         const iIssue2  = lower.indexOf('reporting issue?');
@@ -385,39 +436,32 @@ function syncGroupSheetsStrict() {
           }
         }
 
-        // Distinct attendees who have Reported? TRUE
-        const reportedAttendees = new Set();
-        if (iRep2 >= 0) {
-          for (let r = 0; r < out.length; r++) {
-            if (truthy_(out[r][iRep2])) {
-              const emailVal = iEmail2 >= 0 ? String(out[r][iEmail2] || '').trim().toLowerCase() : '';
-              const ptinVal  = iPtin2  >= 0 ? String(out[r][iPtin2]  || '').trim().toUpperCase() : '';
-              const fVal     = iFirst2 >= 0 ? String(out[r][iFirst2] || '').trim().toLowerCase() : '';
-              const lVal     = iLast2  >= 0 ? String(out[r][iLast2]  || '').trim().toLowerCase() : '';
-              const k = emailVal || ptinVal || (fVal + '|' + lVal);
-              if (k.replace(/\|/g,'').length) reportedAttendees.add(k);
-            }
-          }
-        }
-
         // Place the summary well below the data (2 blank rows after the data)
         const summaryRow = targetSheet.getLastRow() + 2;
-        // 6 rows: header + 4 metrics + 1 report last updated
         targetSheet.getRange(summaryRow, 1, 6, 2).clearContent();
 
-        // Header: just 'Summary'
+        // Summary row: exactly 2 cells wide, merged and centered
         targetSheet.getRange(summaryRow, 1, 1, 2)
           .setValues([['Summary', '']])
+          .mergeAcross()
+          .setHorizontalAlignment('center')
           .setFontWeight('bold');
 
         // Total CE Hours (if present, only where Reported? is TRUE)
         if (iHours2 >= 0 && iRep2 >= 0) {
-          const hoursCol = colToA1_(iHours2+1);
-          const repCol = colToA1_(iRep2+1);
-          const endRow = 1 + out.length;
+          const hoursCol = colToA1_(iHours2 + 1);
+          const repCol   = colToA1_(iRep2 + 1);
+          const endRow   = 1 + out.length;
+
+          const hoursA1 = `${hoursCol}2:${hoursCol}${endRow}`;
+          const repA1   = `${repCol}2:${repCol}${endRow}`;
+
           targetSheet.getRange(summaryRow + 1, 1).setValue('Total CE Hours:');
-          targetSheet.getRange(summaryRow + 1, 2)
-            .setFormula(`=SUMIFS(${hoursCol}2:${hoursCol}${endRow}, ${repCol}2:${repCol}${endRow}, TRUE)`);
+
+          const sumCell = targetSheet.getRange(summaryRow + 1, 2);
+          sumCell
+            .setFormula(`=SUMPRODUCT(N(${repA1}=TRUE), ArrayFormula(IFERROR(VALUE(${hoursA1}),0)))`)
+            .setNumberFormat('0');
         }
 
         // Total Students = distinct attendee count on this sheet
@@ -428,19 +472,15 @@ function syncGroupSheetsStrict() {
         targetSheet.getRange(summaryRow + 3, 1).setValue('Students with Issues:');
         targetSheet.getRange(summaryRow + 3, 2).setValue(issueAttendees.size);
 
-        // Reported Students = distinct attendees with any row Reported? TRUE
-        targetSheet.getRange(summaryRow + 4, 1).setValue('Reported Students:');
-        targetSheet.getRange(summaryRow + 4, 2).setValue(reportedAttendees.size);
+        // CE Hours Last Reported (bold label and value)
+        targetSheet.getRange(summaryRow + 4, 1, 1, 2)
+          .setValues([['CE Hours Last Reported:', latestRepStr]])
+          .setFontWeight('bold');
 
         // Report Last Updated row (bold)
         targetSheet.getRange(summaryRow + 5, 1, 1, 2)
           .setValues([['Report Last Updated:', syncTimestampStr]])
           .setFontWeight('bold');
-
-        // Keep columns auto-sized so headers are readable
-        for (let pass = 0; pass < 2; pass++) {
-          for (let c = 1; c <= lastCol; c++) targetSheet.autoResizeColumn(c);
-        }
       } catch (e) {
         Logger.log('Summary block failed (non-fatal): ' + e.message);
       }
@@ -571,6 +611,35 @@ function countDistinctAttendeesOnSheet_(sheet, lower, lastCol) {
     if (key.replace(/\|/g, '').length) seen.add(key);
   }
   return seen.size;
+}
+
+/**
+ * Returns the exact timestamp when markCleanAsReported last ran, if that
+ * function saved it into Script Properties. Fallback handled by caller.
+ * markCleanAsReported should set:
+ *   PropertiesService.getScriptProperties()
+ *     .setProperty('LAST_CE_HOURS_REPORTED_AT', new Date().toISOString());
+ */
+function getLastCeReportTimestamp_() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const iso = props && props.getProperty('LAST_CE_HOURS_REPORTED_AT');
+    if (!iso) return null;
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? null : d;
+  } catch (e) {
+    Logger.log('getLastCeReportTimestamp_ failed: ' + e.message);
+    return null;
+  }
+}
+
+/**
+ * Format a Date in America/New_York time as "MMM d, yyyy h:mm a EST".
+ * If input is not a valid Date, returns empty string.
+ */
+function formatEstStamp_(d) {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+  return Utilities.formatDate(d, 'America/New_York', "MMM d, yyyy h:mm a 'EST'");
 }
 
 /** Export the strict function for menus */
