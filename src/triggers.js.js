@@ -799,46 +799,80 @@ function formatPtinP0_(ptinRaw) {
   return v;
 }
 
+/**
+ * Looser header finder: matches if the header cell CONTAINS the given text
+ * (case-insensitive). You can pass a single string or an array of candidate
+ * substrings; the first match wins.
+ */
+function findHeaderIndexLoose_(hdrArr, candidates) {
+  const labels = Array.isArray(candidates) ? candidates : [candidates];
+  for (let c = 0; c < hdrArr.length; c++) {
+    const h = String(hdrArr[c] || '').toLowerCase();
+    for (let j = 0; j < labels.length; j++) {
+      const needle = String(labels[j] || '').toLowerCase();
+      if (!needle) continue;
+      if (h.indexOf(needle) !== -1) return c;
+    }
+  }
+  return -1;
+}
 
 function handleMasterIssueUpdatedEdit_(e) {
   try {
     if (!e || !e.range) return;
+
     const sh = e.range.getSheet();
     const masterName = String(CFG.SHEET_MASTER || 'Master').trim().toLowerCase();
     if (sh.getName().trim().toLowerCase() !== masterName) return;
 
-    // Map Master headers
+    const row = e.range.getRow();
+    const col = e.range.getColumn();
+    if (row < 2) return; // ignore header row
+
+    // Normalize header row (removes weird spaces/BOM, etc.)
     const hdrRaw = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
     const hdr = normalizeHeaderRow_(hdrRaw);
-    const mMap = mapHeaders_(hdr);
-    if (!mMap || mMap.masterIssueCol == null) return;
 
-    const issueColIndex = mMap.masterIssueCol + 1; // 1-based column for Reporting Issue?
-    const reportedAtColIndex = mMap.reportedAtCol != null ? mMap.reportedAtCol + 1 : -1;
+    // Find columns by *contains* match instead of exact label,
+    // so things like "Reporting Issue ?" or trailing spaces still work.
+    const issueIdx0      = findHeaderIndexLoose_(hdr, 'reporting issue');
+    const fixedIdx0      = findHeaderIndexLoose_(hdr, 'fixed');
+    const reportedAtIdx0 = findHeaderIndexLoose_(hdr, ['reported at', 'date reported']);
 
-    // Derive Fixed? column by header text, since mapHeaders_ does not currently expose it
-    const lower = hdr.map(h => String(h || '').toLowerCase());
-    const fixedIdx0 = lower.indexOf('fixed?');
-    if (fixedIdx0 < 0) return; // no Fixed? column, nothing to do
-    const fixedColIndex = fixedIdx0 + 1; // 1-based
-
-    const row = e.range.getRow();
-    if (row < 2) return; // ignore header
-
-    // Only respond when the Reporting Issue? cell itself is edited
-    if (e.range.getColumn() !== issueColIndex) return;
-
-    const newVal = String(e.value || '').trim().toLowerCase();
-    if (newVal !== 'updated') return; // only react when set to Updated
-
-    // If there is a Reported At column mapped, require it to be blank before auto-fixing
-    if (reportedAtColIndex > 0) {
-      const reportedAtVal = sh.getRange(row, reportedAtColIndex).getValue();
-      if (reportedAtVal !== '' && reportedAtVal != null) return;
+    if (issueIdx0 < 0 || fixedIdx0 < 0) {
+      // We don't have the columns we need; bail quietly.
+      return;
     }
 
-    // Mark Fixed? = TRUE for this row
+    const issueColIndex      = issueIdx0 + 1; // 1‑based
+    const fixedColIndex      = fixedIdx0 + 1;
+    const reportedAtColIndex = reportedAtIdx0 >= 0 ? reportedAtIdx0 + 1 : -1;
+
+    // Only react when the Reporting Issue? cell itself was edited.
+    if (col !== issueColIndex) return;
+
+    // Use e.value when available, but fall back to the cell's display value
+    // in case the edit came from something like a data‑validation dropdown.
+    const rawVal = (typeof e.value !== 'undefined')
+      ? e.value
+      : sh.getRange(row, issueColIndex).getDisplayValue();
+
+    const newVal = String(rawVal || '').trim().toLowerCase();
+    if (newVal !== 'updated') return; // only react when set to "Updated"
+
+    // If there is a "Reported At" / "Date Reported" column, *only* auto‑fix
+    // rows that have NOT yet been reported.
+    if (reportedAtColIndex > 0) {
+      const reportedAtVal = sh.getRange(row, reportedAtColIndex).getValue();
+      if (reportedAtVal !== '' && reportedAtVal != null) {
+        // Already reported; do not auto‑flip Fixed?.
+        return;
+      }
+    }
+
+    // All checks passed: mark Fixed? = TRUE for this row.
     sh.getRange(row, fixedColIndex).setValue(true);
+
   } catch (err) {
     toast_('handleMasterIssueUpdatedEdit_ error: ' + (err && err.message ? err.message : err), true);
   }
