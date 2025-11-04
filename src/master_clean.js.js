@@ -130,15 +130,23 @@ function buildCleanUpload() {
   }
 
   // --- 4. Final Write ---
-  const cleanRows = Array.from(cleanCandidates.values()).map(r => ({
-    first: r.firstName,
-    last:  r.lastName,
-    ptin:  r.ptin,
-    email: r.email,
-    prog:  r.program,
-    hours: r.hours,
-    completion: normalizeCompletionForUpload_(r.completion)
-  }));
+  const today = new Date();
+  const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  const cleanRows = Array.from(cleanCandidates.values()).map(r => {
+    const rawComp = r.completion;
+    const parsed = parseDate_(rawComp);
+    const compVal = parsed || todayMid; // if no valid completion date, default to today
+    return {
+      first: r.firstName,
+      last:  r.lastName,
+      ptin:  r.ptin,
+      email: r.email,
+      prog:  r.program,
+      hours: r.hours,
+      completion: normalizeCompletionForUpload_(compVal)
+    };
+  });
 
   appendToClean_(ss, cleanRows);
 
