@@ -346,14 +346,27 @@ function formatToMDY_(v) {
   return d ? Utilities.formatDate(d, Session.getScriptTimeZone(), 'MM/dd/yyyy') : '';
 }
 /** ============================================================
- * truthy_()
- * A safer, universal truthiness parser for checkboxes, TRUE/FALSE,
- * "Yes"/"No", "Y"/"N", 1/0, etc.
+ * Boolean helpers
+ * - parseBool_(): robust parsing for TRUE/FALSE, "TRUE", "'TRUE", etc.
+ * - truthy_(): thin wrapper that calls parseBool_.
  * ============================================================ */
-function truthy_(val) {
-  if (val === true) return true;
-  if (val === false) return false;
+function parseBool_(val) {
+  if (typeof val === 'boolean') return val;
   if (val == null) return false;
-  const s = String(val).trim().toLowerCase();
-  return ['true', 'yes', 'y', '1', 'checked', 'x'].includes(s);
+
+  // Convert to string, trim, and strip any leading apostrophes/quotes
+  // (e.g. `'TRUE`, "TRUE" from external systems like Automator).
+  let s = String(val).trim();
+  s = s.replace(/^['"]+/, '').toLowerCase();
+
+  return s === 'true'
+      || s === 'yes'
+      || s === 'y'
+      || s === '1'
+      || s === 'checked'
+      || s === 'x';
+}
+
+function truthy_(val) {
+  return parseBool_(val);
 }
