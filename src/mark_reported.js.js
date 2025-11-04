@@ -4,8 +4,8 @@
  * - Clears Master "Reporting Issue?" and "Last Updated"
  * - Appends a ledger row to "Reported Hours"
  * - Skips any Clean row with a non-blank "Reporting Issue?"
- * - ✅ Sets Roster.Valid? = TRUE for each successfully reported row (by PTIN or Email)
  * - On final batch: clears Clean body, updates Reporting Stats, and syncs RH → Master
+ * - ✅ Writes the finish timestamp to Master!N2 (for group sync summaries)
  *
  * Requires utils: mustGet_, mapCleanHeaders_, normalizeHeaderRow_, mapHeaders_,
  * normalizeProgram_, formatPtinP0_, hasValue_, parseDate_, formatToMDY_, toast_,
@@ -76,6 +76,24 @@ function stepMarkReported_(offset, limit) {
     if (clean.getLastRow() > 1) clean.getRange(2, 1, clean.getLastRow() - 1, clean.getLastColumn()).clearContent();
     try { if (typeof updateProgramReportedTotals === 'function') updateProgramReportedTotals(); } catch (e) { Logger.log('updateProgramReportedTotals failed: ' + e.message); }
     try { if (typeof syncMasterWithReportedHours === 'function') syncMasterWithReportedHours(true); } catch (e) { Logger.log('syncMasterWithReportedHours failed: ' + e.message); }
+    // Also stamp Master!N2 with the exact finish time for downstream displays
+    try {
+      const masterSh = mustGet_(ss, CFG.SHEET_MASTER);
+      const when = new Date();
+      const n2 = masterSh.getRange('N2');
+      n2.setValue(when);
+      // Display with explicit EST label while retaining Date type for formulas
+      n2.setNumberFormat('mmm d, yyyy h:mm am/pm "EST"');
+    } catch (e) {
+      Logger.log('Failed to write Master!N2 timestamp: ' + e.message);
+    }
+    // Persist the exact finish time for downstream summaries (e.g., group sync)
+    try {
+      PropertiesService.getScriptProperties()
+        .setProperty('LAST_CE_HOURS_REPORTED_AT', new Date().toISOString());
+    } catch (e) {
+      Logger.log('Failed to set LAST_CE_HOURS_REPORTED_AT: ' + e.message);
+    }
     toast_('Mark as Reported complete. Clean cleared.');
     return { processed: 0, done: true };
   }
@@ -84,7 +102,7 @@ function stepMarkReported_(offset, limit) {
   const now = new Date();
   const toReportedHours = []; // staged ledger rows
 
-  // ✅ Collect identifiers to flip Roster.Valid? = TRUE after we write Master
+  // ✅ Collect identifiers so we can highlight matching rows on the Roster
   const processedPtins  = new Set();
   const processedEmails = new Set();
 
@@ -149,8 +167,8 @@ function stepMarkReported_(offset, limit) {
 
   if (toReportedHours.length) appendToReportedHours_(ss, toReportedHours);
 
-  // ✅ Flip Roster.Valid? = TRUE for all successfully reported PTIN/Email seen in this batch
-  try { setRosterValidForKeys_(processedPtins, processedEmails); } catch (e) { Logger.log('setRosterValidForKeys_ failed: ' + e.message); }
+  // ✅ Highlight matching Roster rows in light yellow for all successfully reported PTIN/Email seen in this batch
+  try { highlightRosterForKeys_(processedPtins, processedEmails); } catch (e) { Logger.log('highlightRosterForKeys_ failed: ' + e.message); }
 
   return { processed: (end - start), done: false };
 }
@@ -230,4 +248,41 @@ function setRosterValidForKeys_(ptinSet, emailSet) {
 
   if (changed) rng.setValues(vals);
   if (changed) toast_(`Roster Valid? updated: ${changed} row(s) set TRUE after reporting.`);
+}
+
+/** ✅ Helper: Highlight Roster row(s) in light yellow for any matching PTIN or Email */
+function highlightRosterForKeys_(ptinSet, emailSet) {
+  if ((!ptinSet || ptinSet.size === 0) && (!emailSet || emailSet.size === 0)) return;
+
+  const ss = SpreadsheetApp.getActive();
+  const roster = ss.getSheetByName(CFG.SHEET_ROSTER);
+  if (!roster) { toast_(`Sheet "${CFG.SHEET_ROSTER}" not found.`, true); return; }
+
+  const rMap = mapRosterHeaders_(roster);
+  if (!rMap) { toast_('Roster headers missing or renamed.', true); return; }
+
+  const lastRow = roster.getLastRow();
+  if (lastRow < 2) return;
+
+  const numCols = roster.getLastColumn();
+  const rng = roster.getRange(2, 1, lastRow - 1, numCols);
+  const vals = rng.getValues();
+  const bgs  = rng.getBackgrounds();
+
+  let changed = 0;
+  for (let i = 0; i < vals.length; i++) {
+    const row = vals[i];
+    const email = String(row[rMap.email] || '').toLowerCase().trim();
+    const ptin  = formatPtinP0_(row[rMap.ptin] || '');
+    const hit = (email && emailSet && emailSet.has(email)) || (ptin && ptinSet && ptinSet.has(ptin));
+    const isValid = (rMap.valid != null && rMap.valid >= 0) ? parseBool_(row[rMap.valid]) : false;
+    if (hit && !isValid) {
+      for (let c = 0; c < numCols; c++) {
+        bgs[i][c] = '#fff9c4'; // light yellow
+      }
+      changed++;
+    }
+  }
+
+  if (changed) rng.setBackgrounds(bgs);
 }
