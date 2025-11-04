@@ -347,6 +347,8 @@ function syncGroupSheetsStrict() {
       }
     }
 
+    // Re-apply Master-like formatting for Reported? + Reporting Issue? columns
+    applyGroupIssueAndReportedFormatting_(targetSheet);
     totalSheets++;
     totalCells += out.length * lastCol;
     Logger.log(`Group "${gName}" (${gId || 'no-id'}): wrote ${out.length} row(s) to ${targetSS.getName()}.`);
@@ -501,6 +503,78 @@ function getLastCeReportTimestamp_() {
 function formatEstStamp_(d) {
   if (!(d instanceof Date) || isNaN(d.getTime())) return '';
   return Utilities.formatDate(d, 'America/New_York', "MMM d, yyyy h:mm a 'EST'");
+}
+
+/**
+ * Apply Master-like formatting to a group's sheet:
+ * - Reported? column: checkboxes, white background (Google makes the checkmark green)
+ * - Reporting Issue? column: same color mapping as Master + bold text
+ */
+function applyGroupIssueAndReportedFormatting_(targetSheet) {
+  const lastRow = targetSheet.getLastRow();
+  const lastCol = targetSheet.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return; // nothing to format
+
+  // Read header
+  const hdr = targetSheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => String(v || '').trim());
+  const lower = hdr.map(h => h.toLowerCase());
+
+  const iReported = lower.indexOf('reported?');
+  const iIssue    = lower.indexOf('reporting issue?');
+
+  // Start from existing rules but drop any that target the Reported?/Issue? columns
+  const existing = targetSheet.getConditionalFormatRules();
+  const rules = existing.filter(rule => {
+    const ranges = rule.getRanges();
+    return !ranges.some(rg => {
+      const c = rg.getColumn();
+      return (iReported >= 0 && c === iReported + 1) ||
+             (iIssue    >= 0 && c === iIssue + 1);
+    });
+  });
+
+  // ----- Reported? column: checkboxes, white background -----
+  if (iReported >= 0 && lastRow > 1) {
+    const repRange = targetSheet.getRange(2, iReported + 1, lastRow - 1, 1);
+
+    // Ensure checkboxes exist
+    try {
+      repRange.insertCheckboxes();
+    } catch (e) {
+      // If they’re already checkboxes, this can throw; ignore
+    }
+
+    // Make sure background is white (no banding color leaks)
+    repRange.setBackground('#ffffff');
+  }
+
+  // ----- Reporting Issue? column: colors + bold text -----
+  if (iIssue >= 0 && lastRow > 1) {
+    const issueRange = targetSheet.getRange(2, iIssue + 1, lastRow - 1, 1);
+
+    // Color map copied from Master logic
+    const colorMap = {
+      'PTIN does not exist':      { bg: '#2196f3', fg: '#ffffff' }, // Blue
+      'PTIN & name do not match': { bg: '#f44336', fg: '#ffffff' }, // Red
+      'Missing PTIN':             { bg: '#ffeb3b', fg: '#000000' }, // Yellow
+      'Other':                    { bg: '#9e9e9e', fg: '#000000' }  // Grey
+    };
+
+    Object.keys(colorMap).forEach(text => {
+      const cfg = colorMap[text];
+      rules.push(
+        SpreadsheetApp.newConditionalFormatRule()
+          .whenTextEqualTo(text)
+          .setBackground(cfg.bg)
+          .setFontColor(cfg.fg)
+          .setBold(true)                 // make the issue text bold
+          .setRanges([issueRange])
+          .build()
+      );
+    });
+  }
+
+  targetSheet.setConditionalFormatRules(rules);
 }
 
 /** Export the strict function for menus */
