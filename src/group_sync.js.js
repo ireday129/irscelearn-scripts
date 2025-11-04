@@ -521,6 +521,9 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
 
   const iReported = lower.indexOf('reported?');
   const iIssue    = lower.indexOf('reporting issue?');
+  const iPtin     = lower.indexOf('attendee ptin');
+  let   iHours    = lower.indexOf('ce hours awarded');
+  if (iHours < 0) iHours = lower.indexOf('ce hours');
 
   // Start from existing rules but drop any that target the Reported?/Issue? columns
   const existing = targetSheet.getConditionalFormatRules();
@@ -546,6 +549,20 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
 
     // Make sure background is white (no banding color leaks)
     repRange.setBackground('#ffffff');
+
+    // Make TRUE checkboxes show a green check (via font color)
+    try {
+      const repColA1 = colToA1_(iReported + 1);
+      rules.push(
+        SpreadsheetApp.newConditionalFormatRule()
+          .whenFormulaSatisfied(`=$${repColA1}2=TRUE`)
+          .setFontColor('#00b050')
+          .setRanges([repRange])
+          .build()
+      );
+    } catch (e) {
+      Logger.log('Reported? CF rule failed (non-fatal): ' + e.message);
+    }
   }
 
   // ----- Reporting Issue? column: colors + bold text -----
@@ -572,6 +589,19 @@ function applyGroupIssueAndReportedFormatting_(targetSheet) {
           .build()
       );
     });
+  }
+
+  // Center alignment for PTIN, Hours, and Issue columns
+  if (lastRow > 1) {
+    if (iPtin >= 0) {
+      targetSheet.getRange(2, iPtin + 1, lastRow - 1, 1).setHorizontalAlignment('center');
+    }
+    if (iHours >= 0) {
+      targetSheet.getRange(2, iHours + 1, lastRow - 1, 1).setHorizontalAlignment('center');
+    }
+    if (iIssue >= 0) {
+      targetSheet.getRange(2, iIssue + 1, lastRow - 1, 1).setHorizontalAlignment('center');
+    }
   }
 
   targetSheet.setConditionalFormatRules(rules);
