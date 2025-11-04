@@ -285,26 +285,26 @@ function syncGroupSheetsStrict() {
 
       // --- Conditional formatting: yellow rows for issues, green/grey checkboxes for Reported? ---
       try {
-        const iIssue    = lower.indexOf('reporting issue?');
-        const iReported = lower.indexOf('reported?');
+        // Be tolerant of slight header variations ("Reporting Issue" vs "Reporting Issue?")
+        const findIssueCol = () => {
+          let idx = lower.indexOf('reporting issue?');
+          if (idx < 0) idx = lower.indexOf('reporting issue');
+          return idx;
+        };
+        // And "Reported?" vs "Reported"
+        const findReportedCol = () => {
+          let idx = lower.indexOf('reported?');
+          if (idx < 0) idx = lower.indexOf('reported');
+          return idx;
+        };
 
-        // Start from existing rules, but drop any that target the Reporting Issue? or Reported? columns
-        let existing = targetSheet.getConditionalFormatRules() || [];
-        const cleaned = [];
-        existing.forEach(r => {
-          const rs = r.getRanges();
-          if (!rs || !rs.length) {
-            cleaned.push(r);
-            return;
-          }
-          const c = rs[0].getColumn();
-          if (c !== (iIssue + 1) && c !== (iReported + 1)) {
-            cleaned.push(r);
-          }
-        });
+        const iIssue    = findIssueCol();
+        const iReported = findReportedCol();
 
-        const rules = cleaned;
         const dataRange = targetSheet.getRange(2, 1, Math.max(out.length, 1), lastCol);
+
+        // Start with a clean slate: wipe all prior conditional formatting rules
+        const rules = [];
 
         // 1) Any row with a nonblank Reporting Issue? -> yellow row + bold text
         if (iIssue >= 0) {
