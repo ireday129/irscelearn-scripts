@@ -639,6 +639,7 @@ function backfillMasterSourceFromRoster_(quiet){
 function onEdit(e){
   try {
     handleRosterValidEdit_(e);
+    handleMasterIssueUpdatedEdit_(e);
   } catch (err) {
     toast_('onEdit dispatcher error: ' + (err && err.message ? err.message : err), true);
   }
@@ -798,3 +799,47 @@ function formatPtinP0_(ptinRaw) {
   return v;
 }
 
+
+function handleMasterIssueUpdatedEdit_(e) {
+  try {
+    if (!e || !e.range) return;
+    const sh = e.range.getSheet();
+    const masterName = String(CFG.SHEET_MASTER || 'Master').trim().toLowerCase();
+    if (sh.getName().trim().toLowerCase() !== masterName) return;
+
+    // Map Master headers
+    const hdrRaw = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+    const hdr = normalizeHeaderRow_(hdrRaw);
+    const mMap = mapHeaders_(hdr);
+    if (!mMap || mMap.masterIssueCol == null) return;
+
+    const issueColIndex = mMap.masterIssueCol + 1; // 1-based column for Reporting Issue?
+    const reportedAtColIndex = mMap.reportedAtCol != null ? mMap.reportedAtCol + 1 : -1;
+
+    // Derive Fixed? column by header text, since mapHeaders_ does not currently expose it
+    const lower = hdr.map(h => String(h || '').toLowerCase());
+    const fixedIdx0 = lower.indexOf('fixed?');
+    if (fixedIdx0 < 0) return; // no Fixed? column, nothing to do
+    const fixedColIndex = fixedIdx0 + 1; // 1-based
+
+    const row = e.range.getRow();
+    if (row < 2) return; // ignore header
+
+    // Only respond when the Reporting Issue? cell itself is edited
+    if (e.range.getColumn() !== issueColIndex) return;
+
+    const newVal = String(e.value || '').trim().toLowerCase();
+    if (newVal !== 'updated') return; // only react when set to Updated
+
+    // If there is a Reported At column mapped, require it to be blank before auto-fixing
+    if (reportedAtColIndex > 0) {
+      const reportedAtVal = sh.getRange(row, reportedAtColIndex).getValue();
+      if (reportedAtVal !== '' && reportedAtVal != null) return;
+    }
+
+    // Mark Fixed? = TRUE for this row
+    sh.getRange(row, fixedColIndex).setValue(true);
+  } catch (err) {
+    toast_('handleMasterIssueUpdatedEdit_ error: ' + (err && err.message ? err.message : err), true);
+  }
+}
