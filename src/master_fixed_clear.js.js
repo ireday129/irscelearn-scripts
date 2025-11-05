@@ -1,5 +1,5 @@
 /**
- * Global function to process Master sheet fixed status clear.
+ * Global function to process Master sheet edit side-effects.
  * This function MUST be run by an Installable Trigger set to 'On edit'.
  */
 function processMasterEdits(e){
@@ -19,50 +19,9 @@ function processMasterEdits(e){
     const mHdr = normalizeHeaderRow_(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]);
     const mMap = mapHeaders_(mHdr);
     
-    // Find the column indexes: Fixed? is Col 12. Reported? is Col 9. Reporting Issue? is mMap.masterIssueCol.
-    const FIXED_COL_INDEX = 12;      // Column L
-    const REPORTED_COL_INDEX = 9;    // Column I (Based on standard Master layout)
+    // Find the column indexes: Reporting Issue? is mMap.masterIssueCol.
     const ISSUE_COL_INDEX = mMap.masterIssueCol != null ? mMap.masterIssueCol + 1 : 10; // Fallback to J=10
     const REPORTED_AT_COL_INDEX = mMap.reportedAtCol != null ? mMap.reportedAtCol + 1 : null;
-
-    
-    // 1. FIXED? Check (Column L = 12): If FIXED is checked, clear Reporting Issue? (Column J)
-    if (col === FIXED_COL_INDEX && parseBool_(newVal)) {
-        // Clear the Reporting Issue column in the same row
-        sh.getRange(e.range.getRow(), ISSUE_COL_INDEX).setValue('');
-        toast_('Master issue cleared by checking Fixed?.', false);
-    }
-    
-    // 2. REPORTED? Check (Column I = 9): If REPORTED is checked, set Fixed? (Column L) to FALSE
-    if (col === REPORTED_COL_INDEX && parseBool_(newVal)) {
-        // Set the Fixed? column in the same row to FALSE
-        sh.getRange(e.range.getRow(), FIXED_COL_INDEX).setValue(false);
-        toast_('Fixed? status cleared by marking row Reported.', false);
-    }
-
-    // 3. Reporting Issue? set to "Updated": auto-check Fixed? (optionally only if Reported At is blank)
-    if (col === ISSUE_COL_INDEX) {
-      const issueVal = String(newVal || '').trim().toLowerCase();
-      if (issueVal === 'updated') {
-        const rowIndex = e.range.getRow();
-
-        // Check if Reported At is blank (if we know that column)
-        let reportedAtBlank = true;
-        if (REPORTED_AT_COL_INDEX != null) {
-          const reportedAtVal = sh.getRange(rowIndex, REPORTED_AT_COL_INDEX).getValue();
-          reportedAtBlank = !reportedAtVal;
-        }
-
-        if (reportedAtBlank) {
-          const fixedCell = sh.getRange(rowIndex, FIXED_COL_INDEX);
-          const currentFixed = fixedCell.getValue();
-          if (!parseBool_(currentFixed)) {
-            fixedCell.setValue(true);
-            toast_('Fixed? set because Reporting Issue? was marked Updated.', false);
-          }
-        }
-      }
-    }
 
     // --- 3. Roster Valid? Check (Placeholder for other onEdit logic) ---
     // If you have any other onEdit logic (like for the Roster sheet) 

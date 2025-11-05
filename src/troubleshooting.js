@@ -13,3 +13,18 @@ function auditP00000000Rows() {
   }
   toast_(`Rows with P00000000 missing sticky error: ${misses}`);
 }
+
+/**
+ * Logs all installable triggers for this project.
+ * Run this function from the Apps Script editor to see triggers in the Logs.
+ */
+function listInstallableTriggers() {
+  const triggers = ScriptApp.getProjectTriggers();
+  if (triggers.length === 0) {
+    Logger.log('No installable triggers found.');
+  } else {
+    triggers.forEach(trigger => {
+      Logger.log(`ID: ${trigger.getUniqueId()}, Event Type: ${trigger.getEventType()}, Handler Function: ${trigger.getHandlerFunction()}`);
+    });
+  }
+}

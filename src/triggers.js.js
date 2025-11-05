@@ -1,4 +1,23 @@
+
 /* global SpreadsheetApp, CFG, toast_, mapRosterHeaders_, parseBool_ */
+
+
+function logEditEvent_(handlerName, e) {
+  try {
+    if (!e || !e.range) {
+      Logger.log(handlerName + ': no range info on event');
+      return;
+    }
+    const range = e.range;
+    const sh = range.getSheet();
+    const sheetName = sh ? sh.getName() : '(no sheet)';
+    const a1 = range.getA1Notation();
+    const newVal = (typeof e.value !== 'undefined') ? e.value : '(no e.value)';
+    Logger.log(handlerName + ' → sheet "' + sheetName + '", range ' + a1 + ', new value: ' + newVal);
+  } catch (err) {
+    Logger.log(handlerName + ' log error: ' + (err && err.message ? err.message : err));
+  }
+}
 
 
 
@@ -638,6 +657,7 @@ function backfillMasterSourceFromRoster_(quiet){
 /** onEdit: mark Roster Valid? TRUE pushes fixes to Master **/
 function onEdit(e){
   try {
+    logEditEvent_('onEdit', e);
     handleRosterValidEdit_(e);
     handleMasterIssueUpdatedEdit_(e);
   } catch (err) {
@@ -651,6 +671,7 @@ function handleRosterValidEdit_(e){
     const sh = e.range.getSheet();
     const rosterName = String(CFG.SHEET_ROSTER || 'Roster').trim().toLowerCase();
     if (sh.getName().trim().toLowerCase() !== rosterName) return;
+    logEditEvent_('handleRosterValidEdit_', e);
     const map = mapRosterHeaders_(sh);
     if (!map) return;
 
@@ -824,6 +845,7 @@ function handleMasterIssueUpdatedEdit_(e) {
     const sh = e.range.getSheet();
     const masterName = String(CFG.SHEET_MASTER || 'Master').trim().toLowerCase();
     if (sh.getName().trim().toLowerCase() !== masterName) return;
+    logEditEvent_('handleMasterIssueUpdatedEdit_', e);
 
     const row = e.range.getRow();
     const col = e.range.getColumn();

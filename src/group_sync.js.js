@@ -250,21 +250,24 @@ function syncGroupSheetsStrict() {
       const syncTimestamp = new Date();
       const syncTimestampStr = formatEstStamp_(syncTimestamp);
 
-      // CE Hours Last Reported: pull the authoritative timestamp from Master!N2
-      // (mark_reported will maintain this cell).
+      // CE Hours Last Reported: pull the authoritative timestamp from Reporting Stats!B6
+      // (markCleanAsReported will maintain this cell).
       let latestRepStr = '';
       try {
-        const masterSheet = ss.getSheetByName(CFG.SHEET_MASTER);
-        if (masterSheet) {
-          const n2 = masterSheet.getRange('N2').getValue();
-          if (n2 instanceof Date) {
-            latestRepStr = formatEstStamp_(n2);
-          } else if (n2 != null && String(n2).trim() !== '') {
-            latestRepStr = String(n2).trim();
+        const statsName = (typeof CFG !== 'undefined' && CFG.SHEET_REPORTING_STATS)
+          ? CFG.SHEET_REPORTING_STATS
+          : 'Reporting Stats';
+        const statsSheet = ss.getSheetByName(statsName);
+        if (statsSheet) {
+          const v = statsSheet.getRange('B6').getValue();
+          if (v instanceof Date) {
+            latestRepStr = formatEstStamp_(v);
+          } else if (v != null && String(v).trim() !== '') {
+            latestRepStr = String(v).trim();
           }
         }
       } catch (e) {
-        Logger.log('Reading Master!N2 failed (non-fatal): ' + e.message);
+        Logger.log('Reading Reporting Stats!B6 failed (non-fatal): ' + e.message);
       }
 
       // Summary block: totals + distinct attendee counts
