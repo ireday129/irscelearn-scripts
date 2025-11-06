@@ -20,7 +20,8 @@ function markCleanAsReported() {
     email:     cMap.email,
     program:   cMap.program,
     hours:     cMap.hours,
-    completion:cMap.completion
+    completion:cMap.completion,
+    issue:      cMap.issue,
   };
 
   // Require at least (Email + Program) OR (PTIN + Program)
@@ -47,6 +48,7 @@ function markCleanAsReported() {
   const idxProg       = mm.program;
   const idxReported   = mm.reportedCol;
   const idxReportedAt = mm.reportedAtCol;
+  const idxIssue      = mm.masterIssueCol;
 
   if (idxProg == null || idxReported == null || idxReportedAt == null) {
     toast_('Master missing Program/Reported?/Reported At columns; cannot mark reported.', true);
@@ -85,6 +87,8 @@ function markCleanAsReported() {
     const row = cBody[i];
     const prog = normProg(row[ci.program]);
     if (!prog) continue;
+    const issueText = ci.issue >= 0 ? String(row[ci.issue] || '').trim() : '';
+    if (issueText && issueText.toLowerCase() !== 'updated') continue;
 
     const em = ci.email >= 0 ? String(row[ci.email] || '').toLowerCase().trim() : '';
     const pt = ci.ptin  >= 0 ? formatPtinP0_(row[ci.ptin] || '') : '';
@@ -101,6 +105,10 @@ function markCleanAsReported() {
     if (masterIndex == null) continue; // no match in Master
 
     const mrow = mBody[masterIndex];
+    if (idxIssue != null) {
+      const masterIssueVal = String(mrow[idxIssue] || '').trim().toLowerCase();
+      if (masterIssueVal && masterIssueVal !== 'updated') continue;
+    }
 
     // Flip Master flags
     mrow[idxReported]   = true;
