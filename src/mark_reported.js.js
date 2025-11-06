@@ -14,13 +14,13 @@ function markCleanAsReported() {
   const cBody = cVals.slice(1);
 
   const ci = {
-    first: cMap.firstName,
-    last: cMap.lastName,
-    ptin: cMap.ptin,
-    email: cMap.email,
-    program: cMap.program,
-    hours: cMap.hours,
-    completion: cMap.completion
+    first:     cMap.firstName,
+    last:      cMap.lastName,
+    ptin:      cMap.ptin,
+    email:     cMap.email,
+    program:   cMap.program,
+    hours:     cMap.hours,
+    completion:cMap.completion
   };
 
   // Require at least (Email + Program) OR (PTIN + Program)
@@ -38,15 +38,15 @@ function markCleanAsReported() {
     return;
   }
 
-  const mHdr = normalizeHeaderRow_(mVals[0]);
-  const mm   = mapHeaders_(mHdr);
+  const mHdr  = normalizeHeaderRow_(mVals[0]);
+  const mm    = mapHeaders_(mHdr);
   const mBody = mVals.slice(1);
 
-  const idxPtin      = mm.ptin;
-  const idxEmail     = mm.email;
-  const idxProg      = mm.program;
-  const idxReported  = mm.reportedCol;
-  const idxReportedAt= mm.reportedAtCol;
+  const idxPtin       = mm.ptin;
+  const idxEmail      = mm.email;
+  const idxProg       = mm.program;
+  const idxReported   = mm.reportedCol;
+  const idxReportedAt = mm.reportedAtCol;
 
   if (idxProg == null || idxReported == null || idxReportedAt == null) {
     toast_('Master missing Program/Reported?/Reported At columns; cannot mark reported.', true);
@@ -60,7 +60,7 @@ function markCleanAsReported() {
   const normProg = v => normalizeProgram_(v || '');
 
   for (let r = 0; r < mBody.length; r++) {
-    const row = mBody[r];
+    const row  = mBody[r];
     const prog = normProg(row[idxProg]);
     if (!prog) continue;
 
@@ -76,6 +76,9 @@ function markCleanAsReported() {
 
   const now = new Date();
   let updated = 0;
+
+  // rows we’ll append to Reported Hours
+  const reportedRows = [];
 
   // --- Walk Clean rows and mark matching Master rows as reported ---
   for (let i = 0; i < cBody.length; i++) {
@@ -98,14 +101,106 @@ function markCleanAsReported() {
     if (masterIndex == null) continue; // no match in Master
 
     const mrow = mBody[masterIndex];
+
+    // Flip Master flags
     mrow[idxReported]   = true;
     mrow[idxReportedAt] = now;
     updated++;
+
+    // --- Build a robust row for Reported Hours ---
+    // Prefer Clean values, but backfill from Master when missing.
+    const firstFromClean = ci.first >= 0 ? row[ci.first] : '';
+    const lastFromClean  = ci.last  >= 0 ? row[ci.last]  : '';
+    const ptFromClean    = ci.ptin  >= 0 ? formatPtinP0_(row[ci.ptin] || '') : '';
+
+    const firstFromMaster = mm.firstName != null ? mrow[mm.firstName] : '';
+    const lastFromMaster  = mm.lastName  != null ? mrow[mm.lastName]  : '';
+    const ptFromMaster    = idxPtin      != null ? formatPtinP0_(mrow[idxPtin] || '') : '';
+
+    const firstVal = firstFromClean || firstFromMaster || '';
+    const lastVal  = lastFromClean  || lastFromMaster  || '';
+    const ptinVal  = ptFromClean    || ptFromMaster    || '';
+
+    const progVal = ci.program   >= 0 ? row[ci.program]   : (idxProg != null       ? mrow[idxProg]       : '');
+    const hoursVal= ci.hours     >= 0 ? row[ci.hours]     : (mm.hours != null      ? mrow[mm.hours]      : '');
+    const compVal = ci.completion>= 0 ? row[ci.completion]: (mm.completion != null ? mrow[mm.completion] : '');
+
+    reportedRows.push({
+      first: firstVal,
+      last: lastVal,
+      ptin: ptinVal,
+      prog: progVal,
+      hours: hoursVal,
+      completion: compVal,
+      reportedAt: now
+    });
   }
 
   // Write Master back if anything changed
   if (updated) {
     master.getRange(2, 1, mBody.length, mHdr.length).setValues(mBody);
+  }
+
+  // --- Append to Reported Hours sheet (from Clean→Master matches) ---
+  try {
+    if (reportedRows.length) {
+      const reportedName =
+        (typeof CFG !== 'undefined' && CFG.SHEET_REPORTED_HOURS)
+          ? CFG.SHEET_REPORTED_HOURS
+          : 'Reported Hours';
+
+      const rh = ss.getSheetByName(reportedName);
+      if (!rh) {
+        toast_('Reported Hours sheet not found; skipping append.', true);
+      } else {
+        const hdr = rh.getRange(1, 1, 1, rh.getLastColumn())
+          .getValues()[0]
+          .map(x => String(x || '').trim());
+        const lower = hdr.map(h => h.toLowerCase());
+
+        // Re-use clean header mapper (it understands our common labels)
+        const hMap = mapCleanHeaders_(hdr);
+        const iF   = hMap.firstName;
+        const iL   = hMap.lastName;
+        const iP   = hMap.ptin;
+        const iG   = hMap.program;
+        const iH   = hMap.hours;
+        const iC   = hMap.completion;
+
+        const iDateReported = lower.indexOf('date reported');
+
+        if ([iF, iL, iP, iG, iH, iC].some(v => v < 0) || iDateReported < 0) {
+          toast_(
+            'Reported Hours sheet missing one of: Attendee First Name, Attendee Last Name, ' +
+            'Attendee PTIN, Program Number, CE Hours, Program Completion Date, Date Reported.',
+            true
+          );
+        } else {
+          const startRow = rh.getLastRow() + 1;
+          const data = reportedRows.map(r => {
+            const arr = new Array(hdr.length).fill('');
+
+            arr[iF] = r.first || '';
+            arr[iL] = r.last  || '';
+            arr[iP] = formatPtinP0_(r.ptin || '');
+            arr[iG] = normalizeProgram_(r.prog || '');
+            arr[iH] = r.hours || '';
+            arr[iC] = r.completion || '';
+            arr[iDateReported] = r.reportedAt;
+
+            return arr;
+          });
+
+          rh.getRange(startRow, 1, data.length, hdr.length).setValues(data);
+
+          // Make Date Reported look like a proper timestamp
+          rh.getRange(startRow, iDateReported + 1, data.length, 1)
+            .setNumberFormat('mm/dd/yyyy h:mm am/pm');
+        }
+      }
+    }
+  } catch (e) {
+    Logger.log('Appending to Reported Hours failed (non-fatal): ' + e.message);
   }
 
   // Clear Clean sheet body (keep headers)
