@@ -42,6 +42,22 @@ function mapGroupHeadersFlexible_(sheet){
   return { ok: missing.length===0, missing, ...map };
 }
 
+// Lightweight header finder used by group sync when falling back to "Group ID"/"Group Name"
+if (typeof findHeaderIndex_ !== 'function') {
+  /**
+   * Find the index of a header label in a header row, case-insensitive.
+   * @param {string[]} hdr  Raw header row array
+   * @param {string} label  Header label to search for
+   * @return {number} zero-based index or -1 if not found
+   */
+  function findHeaderIndex_(hdr, label) {
+    if (!Array.isArray(hdr)) return -1;
+    const lower = hdr.map(h => String(h || '').trim().toLowerCase());
+    const key = String(label || '').trim().toLowerCase();
+    return lower.indexOf(key);
+  }
+}
+
 /** Public entrypoint for the menu item: “Sync Group Sheets (strict)” */
 function syncGroupSheets() {
   try {
