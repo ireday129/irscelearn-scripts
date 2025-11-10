@@ -5,7 +5,7 @@ function onOpen() {
   const menu = ui.createMenu('EarnTaxCE Tools');
 
   menu
-    .addItem('Build Clean Upload (resumable)', 'buildCleanUpload')
+    .addItem('Build Clean Upload', 'buildCleanUpload')
     .addItem('Recheck Master for Issues', 'recheckMaster')
     .addSeparator()
     
@@ -19,10 +19,6 @@ function onOpen() {
     .addItem('Highlight Roster from Reported Hours', 'highlightRosterFromReportedHoursMenu')
     .addItem('Deduplicate Roster by Email', 'dedupeRosterByEmail')
     .addItem('Backfill Master from Roster', 'backfillMasterFromRosterCombined') // COMBINED ITEM
-    .addSeparator()
-    .addItem('Create/Repair Tabs (Clean & Issues only)', 'ensureAllTabs')
-    .addSeparator()
-    .addItem('Diagnostics (Log all systems)', 'runDiagnostics')
     .addSeparator()
     .addItem('Sanity Scan: Helpers Present', 'sanityScanHelpers');
   menu.addToUi();
