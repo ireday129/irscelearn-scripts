@@ -49,6 +49,7 @@ function markCleanAsReported() {
   const idxReported   = mm.reportedCol;
   const idxReportedAt = mm.reportedAtCol;
   const idxIssue      = mm.masterIssueCol;
+  const idxUpdated    = mm.updatedCol; // Last Updated column on Master (may be null)
 
   if (idxProg == null || idxReported == null || idxReportedAt == null) {
     toast_('Master missing Program/Reported?/Reported At columns; cannot mark reported.', true);
@@ -105,14 +106,27 @@ function markCleanAsReported() {
     if (masterIndex == null) continue; // no match in Master
 
     const mrow = mBody[masterIndex];
+
+    // Track the Master Reporting Issue? value so we can decide what to clear
+    let masterIssueVal = '';
     if (idxIssue != null) {
-      const masterIssueVal = String(mrow[idxIssue] || '').trim().toLowerCase();
+      masterIssueVal = String(mrow[idxIssue] || '').trim().toLowerCase();
+
+      // Only process Master rows whose Reporting Issue? is blank or "Updated"
       if (masterIssueVal && masterIssueVal !== 'updated') continue;
     }
 
     // Flip Master flags
     mrow[idxReported]   = true;
     mrow[idxReportedAt] = now;
+
+    // If this row was marked "Updated" as its Reporting Issue? on Master,
+    // clear both the Reporting Issue? cell AND the Last Updated cell.
+    if (masterIssueVal === 'updated') {
+      if (idxIssue   != null) mrow[idxIssue]   = '';
+      if (idxUpdated != null) mrow[idxUpdated] = '';
+    }
+
     updated++;
 
     // --- Build a robust row for Reported Hours ---

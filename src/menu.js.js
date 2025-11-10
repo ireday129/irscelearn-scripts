@@ -44,8 +44,8 @@ function onOpen(e) {
     .addItem('Sync Reported Hours → Master', 'menu_syncReportedToMaster')
     .addSeparator()
     .addItem('Deduplicate Roster by Email', 'menu_dedupeRosterByEmail')
-    .addItem('Backfill Roster from Master', 'menu_backfillRosterFromMasterReported')
-    .addItem('Update Master from Roster', 'menu_updateMasterFromRoster')
+    .addItem('Backfill Roster from Master', 'backfillMasterFromRosterCombined')
+    .addItem('Update Master from Roster', 'backfillMasterFromRosterCombined')
     .addItem('Update Roster Validity from Issues', 'menu_updateRosterValidityFromIssues')
     .addSeparator()
     .addItem('Create/Repair Tabs', 'menu_ensureAllTabs')
@@ -127,8 +127,8 @@ function menu_dedupeRosterByEmail() {
 }
 function menu_backfillRosterFromMasterReported() {
   return safeCall_(
-    'backfillRosterFromMasterReported_',
-    (typeof backfillRosterFromMasterReported_ === 'function') ? backfillRosterFromMasterReported_ : null
+    'backfillMasterFromRosterCombined',
+    (typeof bbackfillMasterFromRosterCombined === 'function') ? backfillMasterFromRosterCombined : null
   );
 }
 function menu_updateMasterFromRoster() {

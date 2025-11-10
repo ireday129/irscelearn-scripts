@@ -12,6 +12,9 @@ function syncGroupSheets(quiet) {
     const mHdr = normalizeHeaderRow_(mVals[0]);
     const mMap = mapHeaders_(mHdr);
 
+    // Track unique student keys per group for an accurate "Total Students" count
+    const uniqueByGroup = {}; // { gid: Set(keys) }
+
     // START FIX: Override external mapHeaders_ failure for the 'group' column
     if (mMap.group == null) {
       const lowerHdr = mHdr.map(h => h.toLowerCase());
@@ -49,6 +52,14 @@ function syncGroupSheets(quiet) {
       };
       if (!byGroup[gid]) byGroup[gid] = [];
       byGroup[gid].push(rec);
+
+      // build unique student set per group (email > ptin > name)
+      if (!uniqueByGroup[gid]) uniqueByGroup[gid] = new Set();
+      const keyEmail = rec.email ? `E:${rec.email}` : '';
+      const keyPtin  = rec.ptin  ? `P:${rec.ptin}`   : '';
+      const keyName  = (rec.first || rec.last) ? `N:${(rec.first||'').toLowerCase()} ${(rec.last||'').toLowerCase()}`.trim() : '';
+      const uniqKey  = keyEmail || keyPtin || keyName || `R:${r}`; // last resort: row index
+      uniqueByGroup[gid].add(uniqKey);
     }
 // inside syncGroupSheetsNightly(), before syncGroupSheets(true)
 dedupeMasterByEmailProgram(true);
@@ -71,6 +82,12 @@ dedupeMasterByEmailProgram(true);
       const out = [];
       for (const [,idx] of pick) out.push(arr[idx]);
       byGroup[gid] = out;
+    });
+
+    // Calculate final Total Students per group from unique set sizes
+    const totalStudentsByGroup = {};
+    Object.keys(uniqueByGroup).forEach(g => {
+      totalStudentsByGroup[g] = uniqueByGroup[g] ? uniqueByGroup[g].size : 0;
     });
 
     let groupsUpdated = 0, rowsUpdated = 0, groupsSkipped = 0;
@@ -126,6 +143,41 @@ dedupeMasterByEmailProgram(true);
       // Formats (safe)
       if (map.comp>=0) sh.getRange(2, map.comp+1, data.length, 1).setNumberFormat('mm/dd/yyyy');
       if (map.reportedAt>=0) sh.getRange(2, map.reportedAt+1, data.length, 1).setNumberFormat('mm/dd/yyyy hh:mm am/pm');
+
+      // --- Update "Total Students:" metric in the Summary area, if present ---
+      try {
+        const total = totalStudentsByGroup[gid] || 0;
+
+        // Scan a wider "Summary" region to avoid accidental caps:
+        // up to 50 rows and 20 columns from the top-left.
+        const scanRows = Math.min(50, Math.max(2, sh.getLastRow()));
+        const scanCols = Math.min(20, sh.getLastColumn());
+        const top = sh.getRange(1, 1, scanRows, scanCols).getValues();
+
+        let wrote = false;
+        for (let rr = 0; rr < top.length; rr++) {
+          for (let cc = 0; cc < top[rr].length; cc++) {
+            const raw = String(top[rr][cc] || '').trim();
+            if (!raw) continue;
+
+            // Normalize label: case-insensitive; allow with/without colon.
+            const cell = raw.toLowerCase().replace(/\s+/g, ' ').replace(/:$/, '');
+            if (cell === 'total students') {
+              // Write to the cell on the right (same row, next column) if exists
+              if (cc + 1 < scanCols) {
+                sh.getRange(rr + 1, cc + 2).setValue(total);
+                wrote = true;
+                break;
+              }
+            }
+          }
+          if (wrote) break;
+        }
+        // If not found, skip silently — we won't author the summary structure here.
+      } catch (e) {
+        // non-fatal
+        Logger.log('Total Students summary write skipped: ' + (e && e.message));
+      }
 
       groupsUpdated++;
       rowsUpdated += rows.length;
@@ -213,3 +265,6 @@ function setCheckboxValidation_(range) {
       .build();
   range.setDataValidation(rule);
 }
+
+// Note: "Total Students" counts unique attendees per group from the entire Master sheet.
+// Uniqueness preference: Email, then PTIN, then "First Last". No 100-row cap.
