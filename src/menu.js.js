@@ -8,10 +8,8 @@ function onOpen() {
     .addItem('Build Clean Upload (resumable)', 'buildCleanUpload')
     .addItem('Recheck Master for Issues', 'recheckMaster')
     .addSeparator()
-    .addSeparator()
-    .addSeparator()
-    .addItem('Sync Group Sheets (strict)', 'syncGroupSheets')
-    .addItem('Diagnose Group Sync', 'diagnoseGroupSync')
+    
+    .addItem('Sync Group Sheets', 'syncGroupSheets')
     .addSeparator()
     .addItem('Ingest System Reporting Issues', 'ingestSystemReportingIssues')
     .addSeparator()
