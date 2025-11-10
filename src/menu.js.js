@@ -22,6 +22,7 @@ function onOpen() {
     .addItem('Update Reporting Stats', 'updateReportingStatsMenu')
     .addItem('Sync Reported Hours \u2192 Master', 'syncReportedToMasterMenu') // ← new menu item
     .addSeparator()
+    .addItem('Highlight Roster from Reported Hours', 'highlightRosterFromReportedHoursMenu')
     .addItem('Deduplicate Roster by Email', 'dedupeRosterByEmail')
     .addItem('Backfill Master from Roster', 'backfillMasterFromRosterCombined') // COMBINED ITEM
     .addSeparator()
