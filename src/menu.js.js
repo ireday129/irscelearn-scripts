@@ -10,6 +10,7 @@ function onOpen() {
     .addSeparator()
     
     .addItem('Sync Group Sheets', 'syncGroupSheets')
+    .addItem('Sync Group Read Me', 'syncGroupReadMe')
     .addSeparator()
     .addItem('Ingest System Reporting Issues', 'ingestSystemReportingIssues')
     .addSeparator()
