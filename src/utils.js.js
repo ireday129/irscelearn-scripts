@@ -257,41 +257,74 @@ if (typeof mapHeaders_ !== 'function') {
   }
 }
 
-/** Minimal recheckMaster so the menu isn’t broken. */
+/** Recheck Master for basic PTIN / name issues, but NEVER clear existing issues. */
 function recheckMaster() {
   try {
     const ss = SpreadsheetApp.getActive();
     const master = mustGet_(ss, CFG.SHEET_MASTER);
     const mVals = master.getDataRange().getValues();
-    if (mVals.length <= 1) { toast_('Master is empty.', true); return; }
+    if (mVals.length <= 1) {
+      toast_('Master is empty.', true);
+      return;
+    }
 
     const hdr = normalizeHeaderRow_(mVals[0]);
     const mm  = mapHeaders_(hdr);
-    const rosterMap = getRosterMap_(ss); // ok if null
+
+    if (mm.masterIssueCol == null) {
+      toast_('Master is missing "Reporting Issue?" column.', true);
+      return;
+    }
+
+    const issueCol = mm.masterIssueCol; // 0-based
+    const body = mVals.slice(1);
+
+    const rosterMap = (typeof getRosterMap_ === 'function')
+      ? getRosterMap_(ss)  // ok if null
+      : null;
     const ptinRe = /^P0\d{7}$/i;
 
     const out = [];
-    for (let r = 1; r < mVals.length; r++) {
-      const row = mVals[r];
-      const first = String(row[mm.firstName] || '').trim();
-      const last  = String(row[mm.lastName]  || '').trim();
-      const ptin  = formatPtinP0_(row[mm.ptin] || '');
-      let status  = 'Good';
 
-      if (!ptin) status = 'Missing PTIN';
-      else if (!ptinRe.test(ptin) || ptin === 'P00000000') status = 'PTIN does not exist';
+    for (let r = 0; r < body.length; r++) {
+      const row = body[r];
 
-      if (status === 'Good' && rosterMap && ptin) {
-        const ro = rosterMap.get(ptin);
-        if (ro && !namesMatchFull_(first, last, ro.first, ro.last)) status = 'PTIN & name do not match';
+      // 1) Preserve any existing issue text EXACTLY.
+      const existingIssue = String(row[issueCol] || '').trim();
+      if (existingIssue) {
+        out.push([existingIssue]);
+        continue; // do NOT re-evaluate this row
       }
-      out.push([status === 'Good' ? '' : status]);
+
+      // 2) Only compute an issue if the cell is currently blank.
+      const first = mm.firstName != null ? String(row[mm.firstName] || '').trim() : '';
+      const last  = mm.lastName  != null ? String(row[mm.lastName]  || '').trim() : '';
+      const ptin  = mm.ptin      != null ? formatPtinP0_(row[mm.ptin] || '')       : '';
+
+      let status = '';
+
+      if (!ptin) {
+        status = 'Missing PTIN';
+      } else {
+        if (!ptinRe.test(ptin) || ptin === 'P00000000') {
+          status = 'PTIN does not exist';
+        }
+      }
+
+      if (!status && rosterMap && ptin) {
+        const ro = rosterMap.get(ptin);
+        if (ro && !namesMatchFull_(first, last, ro.first, ro.last)) {
+          status = 'PTIN & name do not match';
+        }
+      }
+
+      // If still "good", keep it blank; otherwise write the new status.
+      out.push([status || '']);
     }
 
-    if (mm.masterIssueCol != null) {
-      master.getRange(2, mm.masterIssueCol + 1, out.length, 1).setValues(out);
-    }
-    toast_('Master rechecked.');
+    // 3) Write the *updated* issue column back without clearing any existing issues.
+    master.getRange(2, issueCol + 1, out.length, 1).setValues(out);
+    toast_('Master rechecked (existing Reporting Issue? values preserved).');
   } catch (e) {
     toast_('Recheck failed: ' + e.message, true);
     Logger.log(e.stack || e);
