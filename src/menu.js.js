@@ -2,7 +2,7 @@
 
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
-  const menu = ui.createMenu('IRS CE Tools');
+  const menu = ui.createMenu('EarnTaxCE Tools');
 
   menu
     .addItem('Build Clean Upload (resumable)', 'buildCleanUpload')
