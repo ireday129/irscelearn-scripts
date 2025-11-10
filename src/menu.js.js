@@ -1,195 +1,161 @@
-/* eslint-env es6 */
-/* eslint-env googleappsscript */
+/** IRS CE TOOLS MAIN MENU **/
 
-/* global SpreadsheetApp, ScriptApp, Logger */
-/* global toast_ */
-/* global updateProgramReportedTotals */
-/* global syncMasterWithReportedHours */
-/* global buildCleanUpload, recheckMaster */
-/* global createNightlyTrigger, removeNightlyTrigger */
-/* global createNightlyGroupSyncTrigger, removeNightlyGroupSyncTrigger */
-/* global markCleanAsReported, exportCleanToXlsx */
-/* global syncGroupSheets, diagnoseGroupSync */
-/* global ingestSystemReportingIssues, applyReportingFixes */
-/* global dedupeRosterByEmail */
-/* global updateRosterValidityFromIssues_, ensureAllTabs */
-/* global backfillRosterFromMasterReported_ */
-/* global highlightRosterFromReportedHours */
-/* global updateMasterFromRoster_ */
-
-/**
- * IRS CE TOOLS MAIN MENU
- * Always registers handlers that exist in THIS file (wrappers),
- * so the menu never breaks even if core functions are missing.
- */
-function onOpen(e) {
+function onOpen() {
   const ui = SpreadsheetApp.getUi();
   const menu = ui.createMenu('IRS CE Tools');
 
   menu
-    .addItem('Build Clean Upload', 'menu_buildCleanUpload')
-    .addItem('Recheck Master for Issues', 'menu_recheckMaster')
+    .addItem('Build Clean Upload (resumable)', 'buildCleanUpload')
+    .addItem('Recheck Master for Issues', 'recheckMaster')
     .addSeparator()
-    .addItem('Mark Clean as Reported', 'menu_markCleanAsReported')
-    .addItem('Export Clean as XLSX', 'menu_exportCleanToXlsx')
+    .addItem('Create Nightly Clean Trigger', 'createNightlyTrigger')
+    .addItem('Remove Nightly Clean Trigger', 'removeNightlyTrigger')
+    .addItem('Create Nightly Group Sync Trigger', 'createNightlyGroupSyncTrigger')
+    .addItem('Remove Nightly Group Sync Trigger', 'removeNightlyGroupSyncTrigger')
     .addSeparator()
-    .addItem('Sync Group Sheets', 'menu_syncGroupSheets')
-    .addItem('Diagnose Group Sync', 'menu_diagnoseGroupSync')
     .addSeparator()
-    .addItem('Ingest System Reporting Issues', 'menu_ingestSystemReportingIssues')
-    .addItem('Apply Reporting Fixes', 'menu_applyReportingFixes')
-    .addItem('Apply Reporting Issue Validation', 'menu_applyReportingIssueValidation')
+    .addItem('Sync Group Sheets (strict)', 'syncGroupSheets')
+    .addItem('Diagnose Group Sync', 'diagnoseGroupSync')
     .addSeparator()
-    .addItem('Update Reporting Stats', 'menu_updateReportingStats')
-    .addItem('Sync Reported Hours → Master', 'menu_syncReportedToMaster')
+    .addItem('Ingest System Reporting Issues', 'ingestSystemReportingIssues')
     .addSeparator()
-    .addItem('Deduplicate Roster by Email', 'menu_dedupeRosterByEmail')
-    .addItem('Backfill Roster from Master', 'backfillMasterFromRosterCombined')
-    .addItem('Update Master from Roster', 'backfillMasterFromRosterCombined')
-    .addItem('Update Roster Validity from Issues', 'menu_updateRosterValidityFromIssues')
+    .addItem('Update Reporting Stats', 'updateReportingStatsMenu')
+    .addItem('Sync Reported Hours \u2192 Master', 'syncReportedToMasterMenu') // ← new menu item
     .addSeparator()
-    .addItem('Create/Repair Tabs', 'menu_ensureAllTabs')
+    .addItem('Deduplicate Roster by Email', 'dedupeRosterByEmail')
+    .addItem('Backfill Master from Roster', 'backfillMasterFromRosterCombined') // COMBINED ITEM
     .addSeparator()
-    .addItem('Diagnostics – Log all systems', 'menu_runDiagnostics')
-    .addItem('Highlight Roster from Reported Hours', 'menu_highlightRosterFromReportedHours');
-
+    .addItem('Create/Repair Tabs (Clean & Issues only)', 'ensureAllTabs')
+    .addSeparator()
+    .addItem('Diagnostics (Log all systems)', 'runDiagnostics')
+    .addSeparator()
+    .addItem('Sanity Scan: Helpers Present', 'sanityScanHelpers');
   menu.addToUi();
 }
 
-/** --------------- SAFE WRAPPER UTIL --------------- */
-function safeCall_(label, fn, args) {
-  try {
-    if (typeof fn !== 'function') {
-      throw new Error(label + '() is not available in this project.');
-    }
-    const out = fn.apply(null, args || []);
-    if (typeof toast_ === 'function') {
-      toast_(label + ' ran.');
-    } else {
-      SpreadsheetApp.getActive().toast(label + ' ran.');
-    }
-    return out;
-  } catch (err) {
-    const msg = label + ' failed: ' + (err && err.message ? err.message : err);
-    if (typeof toast_ === 'function') {
-      toast_(msg, true);
-    } else {
-      SpreadsheetApp.getActive().toast(msg, 'IRS CE Tools', 5);
-    }
-    Logger.log(err && (err.stack || err));
-    return null;
-  }
+/**
+ * Sanity Scan: verifies required helpers and key sheets exist.
+ * Results go to Logs and a short toast shows counts.
+ */
+function sanityScanHelpers() {
+  const ss = SpreadsheetApp.getActive();
+
+  // ---- declare the helpers you expect to exist
+  const requiredHelpers = [
+    'toast_',
+    'mustGet_',
+    'normalizeHeaderRow_',
+    'mapHeaders_',
+    'mapCleanHeaders_',
+    'parseDate_',
+    'formatToMDY_',
+    'formatPtinP0_',
+    'normalizeProgram_',
+    'namesMatchFull_',
+    'normalizeCompletionForUpload_',
+    'writeCleanDataOnly_',
+    'buildUnresolvedIssueIndex_',
+
+    // workflow functions you call elsewhere (list only the ones you actually use)
+    'buildCleanUpload',
+    'recheckMaster',
+    'markCleanAsReported',
+    'updateProgramReportedTotals',
+    'syncMasterWithReportedHours',
+    'dedupeReportedHoursByPtinProgram',
+    'highlightRosterFromReportedHours',
+    'triggerRosterValidWebhookMaybe' // optional—remove if you renamed it
+  ];
+
+  // ---- key sheets you rely on (change these if your CFG is different)
+  const requiredSheets = [
+    (typeof CFG !== 'undefined' && CFG && CFG.SHEET_MASTER) || 'Master',
+    (typeof CFG !== 'undefined' && CFG && CFG.SHEET_CLEAN) || 'Clean',
+    (typeof CFG !== 'undefined' && CFG && CFG.SHEET_ROSTER) || 'Roster',
+    'Reported Hours',            // ledger you’re using for stats/highlighting
+    (typeof CFG !== 'undefined' && CFG && CFG.SHEET_SYS_ISSUES) || 'System Reporting Issues' // optional
+  ];
+
+  // ---- scan helpers
+  const missingHelpers = [];
+  const presentHelpers = [];
+  requiredHelpers.forEach(fn => {
+    const t = typeof globalThis[fn];
+    if (t === 'function') presentHelpers.push(fn);
+    else missingHelpers.push(fn);
+  });
+
+  // ---- scan sheets
+  const missingSheets = [];
+  const presentSheets = [];
+  requiredSheets.forEach(name => {
+    if (!name) return;
+    const sh = ss.getSheetByName(String(name));
+    if (sh) presentSheets.push(name);
+    else missingSheets.push(name);
+  });
+
+  // ---- log a pretty report
+  const lines = [];
+  lines.push('--- IRS CE Tools • Sanity Scan ---');
+  lines.push('Timestamp: ' + new Date());
+  lines.push('');
+  lines.push('Helpers present (' + presentHelpers.length + '): ' + (presentHelpers.length ? presentHelpers.join(', ') : '—'));
+  lines.push('Helpers MISSING (' + missingHelpers.length + '): ' + (missingHelpers.length ? missingHelpers.join(', ') : '—'));
+  lines.push('');
+  lines.push('Sheets present (' + presentSheets.length + '): ' + (presentSheets.length ? presentSheets.join(', ') : '—'));
+  lines.push('Sheets MISSING (' + missingSheets.length + '): ' + (missingSheets.length ? missingSheets.join(', ') : '—'));
+  Logger.log(lines.join('\n'));
+
+  // ---- quick toast summary
+  toast_(
+    'Sanity Scan complete • Helpers: ' + presentHelpers.length + ' ok, ' + missingHelpers.length + ' missing • Sheets: ' + presentSheets.length + ' ok, ' + missingSheets.length + ' missing',
+    (missingHelpers.length || missingSheets.length)
+  );
 }
 
-/** --------------- MENU HANDLERS (WRAPPERS) --------------- */
-function menu_buildCleanUpload() {
-  return safeCall_('buildCleanUpload', (typeof buildCleanUpload === 'function') ? buildCleanUpload : null);
-}
-function menu_recheckMaster() {
-  return safeCall_('recheckMaster', (typeof recheckMaster === 'function') ? recheckMaster : null);
-}
-function menu_markCleanAsReported() {
-  return safeCall_('markCleanAsReported', (typeof markCleanAsReported === 'function') ? markCleanAsReported : null);
-}
-function menu_exportCleanToXlsx() {
-  return safeCall_('exportCleanToXlsx', (typeof exportCleanToXlsx === 'function') ? exportCleanToXlsx : null);
-}
-function menu_syncGroupSheets() {
-  // Support either a direct function or a menu alias provided elsewhere
-  var fn = null;
-  if (typeof syncGroupSheets === 'function') fn = syncGroupSheets;
-  else if (typeof syncGroupSheetsMenu === 'function') fn = syncGroupSheetsMenu;
-  return safeCall_('syncGroupSheets', fn);
-}
-function menu_diagnoseGroupSync() {
-  return safeCall_('diagnoseGroupSync', (typeof diagnoseGroupSync === 'function') ? diagnoseGroupSync : null);
-}
-function menu_ingestSystemReportingIssues() {
-  return safeCall_('ingestSystemReportingIssues', (typeof ingestSystemReportingIssues === 'function') ? ingestSystemReportingIssues : null);
-}
-function menu_applyReportingFixes() {
-  return safeCall_('applyReportingFixes', (typeof applyReportingFixes === 'function') ? applyReportingFixes : null);
-}
-function menu_applyReportingIssueValidation() {
-  return safeCall_(
-    'applyReportingIssueValidationAndFormatting_',
-    (typeof applyReportingIssueValidationAndFormatting_ === 'function') ? applyReportingIssueValidationAndFormatting_ : null
-  );
-}
-function menu_updateReportingStats() {
-  return safeCall_('updateProgramReportedTotals', (typeof updateProgramReportedTotals === 'function') ? updateProgramReportedTotals : null);
-}
-function menu_syncReportedToMaster() {
-  return safeCall_('syncMasterWithReportedHours', (typeof syncMasterWithReportedHours === 'function') ? syncMasterWithReportedHours : null);
-}
-function menu_dedupeRosterByEmail() {
-  return safeCall_('dedupeRosterByEmail', (typeof dedupeRosterByEmail === 'function') ? dedupeRosterByEmail : null);
-}
-function menu_backfillRosterFromMasterReported() {
-  return safeCall_(
-    'backfillMasterFromRosterCombined',
-    (typeof bbackfillMasterFromRosterCombined === 'function') ? backfillMasterFromRosterCombined : null
-  );
-}
-function menu_updateMasterFromRoster() {
-  return safeCall_(
-    'updateMasterFromRoster_',
-    (typeof updateMasterFromRoster_ === 'function') ? updateMasterFromRoster_ : null
-  );
-}
-function menu_updateRosterValidityFromIssues() {
-  return safeCall_(
-    'updateRosterValidityFromIssues_',
-    (typeof updateRosterValidityFromIssues_ === 'function') ? updateRosterValidityFromIssues_ : null
-  );
-}
-function menu_ensureAllTabs() {
-  return safeCall_('ensureAllTabs', (typeof ensureAllTabs === 'function') ? ensureAllTabs : null);
-}
-function menu_runDiagnostics() {
+/** Optional unified diagnostic runner */
+function runDiagnostics() {
   try {
     const logs = [];
     logs.push('--- IRS CE Diagnostics ---');
     logs.push('Timestamp: ' + new Date());
-    const ss = SpreadsheetApp.getActive();
+
     logs.push('Sheets present:');
-    ss.getSheets().forEach(function (s) { logs.push('  • ' + s.getName()); });
+    const ss = SpreadsheetApp.getActive();
+    ss.getSheets().forEach(s => logs.push('  • ' + s.getName()));
+
     logs.push('Triggers present:');
-    ScriptApp.getProjectTriggers().forEach(function (t) {
-      logs.push('  • ' + t.getHandlerFunction() + ' (' + t.getEventType() + ')');
+    ScriptApp.getProjectTriggers().forEach(t => {
+      logs.push(`  • ${t.getHandlerFunction()} (${t.getEventType()})`);
     });
+
     Logger.log(logs.join('\n'));
     SpreadsheetApp.getActiveSpreadsheet().toast('Diagnostics complete. Check Execution Log.');
-  } catch (e2) {
-    SpreadsheetApp.getActiveSpreadsheet().toast('Diagnostics failed: ' + e2.message, 'IRS CE Tools', 5);
-    Logger.log(e2.stack || e2.message);
+  } catch (e) {
+    SpreadsheetApp.getActiveSpreadsheet().toast('Diagnostics failed: ' + e.message, 'IRS CE Tools', 5);
+    Logger.log(e.stack || e.message);
   }
 }
-function menu_highlightRosterFromReportedHours() {
-  return safeCall_(
-    'highlightRosterFromReportedHours',
-    (typeof highlightRosterFromReportedHours === 'function') ? highlightRosterFromReportedHours : null
-  );
+
+/** Menu: Update Reporting Stats (calls reporting_stats.js) */
+function updateReportingStatsMenu() {
+  try {
+    updateProgramReportedTotals();  // must exist in reporting_stats.js
+    toast_('Reporting Stats updated from Reported Hours.');
+  } catch (e) {
+    toast_('Failed to update Reporting Stats: ' + e.message, true);
+    Logger.log(e.stack || e);
+  }
 }
 
-/** --------------- EXPLICIT EXPORTS (defensive) --------------- */
-// Make sure Apps Script can always discover the handlers
-this.onOpen = onOpen;
-this.menu_buildCleanUpload = menu_buildCleanUpload;
-this.menu_recheckMaster = menu_recheckMaster;
-this.menu_markCleanAsReported = menu_markCleanAsReported;
-this.menu_exportCleanToXlsx = menu_exportCleanToXlsx;
-this.menu_syncGroupSheets = menu_syncGroupSheets;
-this.menu_diagnoseGroupSync = menu_diagnoseGroupSync;
-this.menu_ingestSystemReportingIssues = menu_ingestSystemReportingIssues;
-this.menu_applyReportingFixes = menu_applyReportingFixes;
-this.menu_applyReportingIssueValidation = menu_applyReportingIssueValidation;
-this.menu_updateReportingStats = menu_updateReportingStats;
-this.menu_syncReportedToMaster = menu_syncReportedToMaster;
-this.menu_dedupeRosterByEmail = menu_dedupeRosterByEmail;
-this.menu_backfillRosterFromMasterReported = menu_backfillRosterFromMasterReported;
-this.menu_updateMasterFromRoster = menu_updateMasterFromRoster;
-this.menu_updateRosterValidityFromIssues = menu_updateRosterValidityFromIssues;
-this.menu_ensureAllTabs = menu_ensureAllTabs;
-this.menu_runDiagnostics = menu_runDiagnostics;
-this.menu_highlightRosterFromReportedHours = menu_highlightRosterFromReportedHours;
+/** Menu: Sync Reported Hours → Master (calls sync_reported_to_master.js.gs) */
+function syncReportedToMasterMenu() {
+  try {
+    syncMasterWithReportedHours(); // must exist in sync_reported_to_master.js.gs
+    toast_('Reported Hours → Master sync complete.');
+  } catch (e) {
+    toast_('Failed to sync Reported Hours → Master: ' + e.message, true);
+    Logger.log(e.stack || e);
+  }
+}
