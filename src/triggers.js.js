@@ -660,6 +660,7 @@ function onEdit(e){
     logEditEvent_('onEdit', e);
     handleRosterValidEdit_(e);
     handleMasterIssueUpdatedEdit_(e);
+    handleMasterStartHereProgram_(e);
   } catch (err) {
     toast_('onEdit dispatcher error: ' + (err && err.message ? err.message : err), true);
   }
@@ -897,5 +898,51 @@ function handleMasterIssueUpdatedEdit_(e) {
 
   } catch (err) {
     toast_('handleMasterIssueUpdatedEdit_ error: ' + (err && err.message ? err.message : err), true);
+  }
+}
+
+/**
+ * If Program Number is set to "Start Here" on the Master, delete the entire row.
+ * This catches new rows pasted/entered with the placeholder value.
+ */
+function handleMasterStartHereProgram_(e) {
+  try {
+    if (!e || !e.range) return;
+
+    const sh = e.range.getSheet();
+    const masterName = String(CFG.SHEET_MASTER || 'Master').trim().toLowerCase();
+    if (!sh || sh.getName().trim().toLowerCase() !== masterName) return;
+
+    const hdr = normalizeHeaderRow_(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]);
+    const programIdx0 = findHeaderIndexLoose_(hdr, [
+      (CFG.COL_HEADERS && CFG.COL_HEADERS.program) || 'Program Number',
+      'program'
+    ]);
+    if (programIdx0 < 0) return;
+    const programCol1 = programIdx0 + 1;
+
+    // Only inspect rows that intersect the edited range.
+    const editStartRow = Math.max(2, e.range.getRow());
+    const editEndRow = e.range.getRow() + e.range.getNumRows() - 1;
+    if (editEndRow < 2) return;
+
+    const programValues = sh
+      .getRange(editStartRow, programCol1, editEndRow - editStartRow + 1, 1)
+      .getDisplayValues();
+
+    const rowsToDelete = [];
+    for (let i = 0; i < programValues.length; i++) {
+      const val = String(programValues[i][0] || '').trim().toLowerCase();
+      if (val === 'start here') rowsToDelete.push(editStartRow + i);
+    }
+
+    if (!rowsToDelete.length) return;
+
+    // Delete from bottom to top so indices do not shift.
+    for (let i = rowsToDelete.length - 1; i >= 0; i--) {
+      sh.deleteRow(rowsToDelete[i]);
+    }
+  } catch (err) {
+    toast_('handleMasterStartHereProgram_ error: ' + (err && err.message ? err.message : err), true);
   }
 }
