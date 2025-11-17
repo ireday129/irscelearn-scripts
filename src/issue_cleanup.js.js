@@ -13,23 +13,31 @@ function applyReportingIssueValidationAndFormatting_() {
   const clean = ss.getSheetByName(CFG.SHEET_CLEAN);
   if (clean && clean.getLastRow() >= 1) {
     const ch = clean.getRange(1,1,1, clean.getLastColumn()).getValues()[0].map(s=>String(s||'').trim());
+    const iProg = ch.indexOf('Program Number');
     const iRI = ch.indexOf('Reporting Issue?');
     if (iRI >= 0) {
       const range = clean.getRange(2, iRI+1, Math.max(clean.getMaxRows()-1, 1), 1);
       setDropdown_(range, choices, true);
       setIssueColors_(clean, iRI+1);
     }
+    if (iRI >= 0 && iProg >= 0) {
+      setOnboardingForStartHere_(clean, iRI + 1, iProg + 1);
+    }
   }
 
   const master = ss.getSheetByName(CFG.SHEET_MASTER);
   if (master && master.getLastRow() >= 1) {
     const mh = master.getRange(1,1,1, master.getLastColumn()).getValues()[0].map(s=>String(s||'').trim());
+    const iProg = mh.indexOf('Program Number');
     const iRI = mh.indexOf(CFG.COL_HEADERS.masterIssueCol);
     const iRep = mh.indexOf(CFG.COL_HEADERS.reportedCol);
     if (iRI >= 0) {
       const range = master.getRange(2, iRI+1, Math.max(master.getMaxRows()-1,1), 1);
       setDropdown_(range, choices, false);
       setIssueColors_(master, iRI+1);
+    }
+    if (iRI >= 0 && iProg >= 0) {
+      setOnboardingForStartHere_(master, iRI + 1, iProg + 1);
     }
     if (iRep >= 0) {
       setReportedCheckboxColors_(master, iRep + 1);
@@ -143,6 +151,39 @@ function setReportedCheckboxColors_(sheet, colIdx1) {
 
   rules.push(greenCheckRule);
   sheet.setConditionalFormatRules(rules);
+}
+
+/**
+ * For any row where Program Number == 'Start Here' and the Reporting Issue? cell
+ * is blank, set the Reporting Issue? value to 'Onboarding'.
+ *
+ * @param {Sheet} sheet              The sheet to operate on.
+ * @param {number} issueColIdx1      1-based column index of the Reporting Issue? column.
+ * @param {number} programColIdx1    1-based column index of the Program Number column.
+ */
+function setOnboardingForStartHere_(sheet, issueColIdx1, programColIdx1) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return; // header only
+
+  const numRows = lastRow - 1;
+  const programRange = sheet.getRange(2, programColIdx1, numRows, 1).getValues();
+  const issueRange = sheet.getRange(2, issueColIdx1, numRows, 1);
+  const issueValues = issueRange.getValues();
+
+  let changed = false;
+  for (let i = 0; i < numRows; i++) {
+    const programNum = String(programRange[i][0] || '').trim();
+    const currentIssue = String(issueValues[i][0] || '').trim();
+
+    if (programNum === 'Start Here' && !currentIssue) {
+      issueValues[i][0] = 'Onboarding';
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    issueRange.setValues(issueValues);
+  }
 }
 
 /** Stub for dependency: Placeholder for checking System Reporting Issues sheet. */
