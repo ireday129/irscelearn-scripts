@@ -56,14 +56,18 @@ function updateProgramReportedTotals() {
 
 /** Optional: call from your nightly job */
 function nightlyUpdateReportingStats() {
+  // Update per-program counts (B11..B18)
   updateProgramReportedTotals();
+  // Update total CE hours reported (B5)
+  updateTotalReportedCEHours();
   // toast_('Reporting Stats updated from Reported Hours.'); // enable if you like toasts
 }
+
 /**
  * Update Reporting Stats — CE Hours total from Reported Hours
- * Places result in Reporting Stats cell B5
+ * Places result in Reporting Stats cell B5.
  */
-function updateProgramReportedTotals() {
+function updateTotalReportedCEHours() {
   const ss = SpreadsheetApp.getActive();
   const stats = ss.getSheetByName('Reporting Stats');
   const reported = ss.getSheetByName('Reported Hours');
@@ -79,7 +83,7 @@ function updateProgramReportedTotals() {
     return;
   }
 
-  // Column E = index 4 (0-based)
+  // Column E = index 4 (0-based) holds CE Hours
   let totalHours = 0;
   for (let i = 1; i < vals.length; i++) {
     const v = vals[i][4];

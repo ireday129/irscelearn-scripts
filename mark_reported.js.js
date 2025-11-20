@@ -104,7 +104,22 @@ function stepMarkReported_(offset, limit) {
     let mi = -1;
     if (email && idxPE.has(prog + '|' + email)) mi = idxPE.get(prog + '|' + email);
     else if (ptin && idxPP.has(prog + '|' + ptin)) mi = idxPP.get(prog + '|' + ptin);
-    if (mi < 0) continue;
+    if (mi < 0) {
+      // No Master match, but if CE Hours Awarded exists and no Reporting Issue, still append to Reported Hours
+      if (iCH >= 0 && String(crow[iCH] || '').trim() !== '') {
+        toReportedHours.push({
+          'Attendee First Name': (iCF>=0 ? crow[iCF] : ''),
+          'Attendee Last Name':  (iCL>=0 ? crow[iCL] : ''),
+          'PTIN':                ptin,
+          'Program Number':      prog,
+          'CE Hours':            crow[iCH],
+          'Email':               email,
+          'Program Completion Date': (iCC>=0 ? formatToMDY_(crow[iCC]) : ''),
+          'Date Reported':       formatToMDY_(now)
+        });
+      }
+      continue;
+    }
 
     const mrow = mBody[mi];
 

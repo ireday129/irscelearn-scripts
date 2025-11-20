@@ -99,10 +99,11 @@ function buildCleanUpload() {
       continue;
     }
     
-    // 3. NEW HARD EXCLUSION: If the Reporting Issue column has ANY value, skip it.
-    // This implements the strict rule to only process rows that are completely blank in that column.
-    if (rec.issueVal !== '') {
-        continue;
+    // 3. HARD EXCLUSION: If the Reporting Issue column has ANY value *other than "Updated"*, skip it.
+    // Rows marked "Updated" are allowed into the Clean sheet alongside blank issue rows.
+    const issueNorm = String(rec.issueVal || '').trim().toLowerCase();
+    if (issueNorm !== '' && issueNorm !== 'updated') {
+      continue;
     }
 
     // Status classification for any *new* problems
