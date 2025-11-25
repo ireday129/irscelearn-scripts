@@ -102,9 +102,27 @@ function updateTotalReportedCEHours() {
   const iProgram = hdr.indexOf('program number');
   if (iProgram < 0) throw new Error('Reported Hours is missing "Program Number" column.');
 
-  // Try to locate CE Hours column by header; fall back to column E (index 4)
-  let iHours = hdr.indexOf('ce hours');
-  if (iHours < 0) iHours = 4; // assumes column E if header not found
+  // Try to locate CE Hours column by header with several candidates; fall back to column E (index 4)
+  const CE_HOURS_HEADER_CANDIDATES = [
+    'ce hours reported',
+    'ce hours',
+    'hours reported',
+    'hours'
+  ];
+
+  let iHours = -1;
+  for (const cand of CE_HOURS_HEADER_CANDIDATES) {
+    const idx = hdr.indexOf(cand);
+    if (idx >= 0) {
+      iHours = idx;
+      break;
+    }
+  }
+
+  if (iHours < 0) {
+    // Fallback: assume column E (index 4) if we still couldn't find a match
+    iHours = 4;
+  }
 
   let totalHours = 0;
 
