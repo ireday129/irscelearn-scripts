@@ -56,40 +56,80 @@ function updateProgramReportedTotals() {
 
 /** Optional: call from your nightly job */
 function nightlyUpdateReportingStats() {
-  // Update per-program counts (B11..B18)
-  updateProgramReportedTotals();
-  // Update total CE hours reported (B5)
   updateTotalReportedCEHours();
   // toast_('Reporting Stats updated from Reported Hours.'); // enable if you like toasts
 }
 
 /**
- * Update Reporting Stats — CE Hours total from Reported Hours
- * Places result in Reporting Stats cell B5.
+ * Update Reporting Stats — CE Hours total and per-program counts from Reported Hours
+ * Places per-program counts in B11..B18, and total CE hours in B5.
  */
 function updateTotalReportedCEHours() {
   const ss = SpreadsheetApp.getActive();
-  const stats = ss.getSheetByName('Reporting Stats');
-  const reported = ss.getSheetByName('Reported Hours');
+  const reported = mustGet_(ss, 'Reported Hours');
+  const stats    = mustGet_(ss, 'Reporting Stats');
 
-  if (!stats || !reported) {
-    toast_('Missing Reporting Stats or Reported Hours sheet.', true);
-    return;
-  }
+  // Program Number -> target cell on Reporting Stats (B11..B18 as specified)
+  const PROGRAM_COUNT_CELLS = {
+    'RTPMH-A-00004-25-S': 'B11', // Annual Federal Tax Refresher
+    'RTPMH-T-00010-25-S': 'B12', // Tax Cuts & Jobs Act Walkthrough
+    'RTPMH-T-00009-25-S': 'B13', // 1040 Schedule C: Business or Hobby
+    'RTPMH-T-00008-25-S': 'B14', // 1040 Schedule A: Itemized Deductions
+    'RTPMH-T-00007-25-S': 'B15', // Earned Income Tax Credit: Who and Why
+    'RTPMH-T-00006-25-S': 'B16', // Child & Dependent Care Credit Decoded
+    'RTPMH-T-00003-25-S': 'B17', // Mastering IRS Authorizations: 8821, 2848 & the CAF Unit
+    'RTPMH-E-00005-25-S': 'B18'  // Circular 230: Tax Pro Bible
+  };
+
+  const keys   = Object.keys(PROGRAM_COUNT_CELLS);
+  const wanted = new Set(keys.map(normalizeProgram_));
+  const counts = {};
+  keys.forEach(k => counts[normalizeProgram_(k)] = 0);
 
   const vals = reported.getDataRange().getValues();
+
+  // If no data rows, zero out everything and exit
   if (vals.length <= 1) {
+    for (const addr of Object.values(PROGRAM_COUNT_CELLS)) {
+      stats.getRange(addr).setValue(0);
+    }
     stats.getRange('B5').setValue(0);
     return;
   }
 
-  // Column E = index 4 (0-based) holds CE Hours
+  // Map headers (case-insensitive)
+  const hdr = vals[0].map(s => String(s || '').trim().toLowerCase());
+  const iProgram = hdr.indexOf('program number');
+  if (iProgram < 0) throw new Error('Reported Hours is missing "Program Number" column.');
+
+  // Try to locate CE Hours column by header; fall back to column E (index 4)
+  let iHours = hdr.indexOf('ce hours');
+  if (iHours < 0) iHours = 4; // assumes column E if header not found
+
   let totalHours = 0;
-  for (let i = 1; i < vals.length; i++) {
-    const v = vals[i][4];
+
+  // Walk data rows once: tally per-program counts AND total CE hours
+  for (let r = 1; r < vals.length; r++) {
+    const row = vals[r];
+
+    // Program count logic
+    const prog = normalizeProgram_(row[iProgram]);
+    if (prog && wanted.has(prog)) {
+      counts[prog] = (counts[prog] || 0) + 1;
+    }
+
+    // CE hours total
+    const v = row[iHours];
     const num = Number(v);
     if (!isNaN(num)) totalHours += num;
   }
 
+  // Write per-program counts
+  for (const [progRaw, addr] of Object.entries(PROGRAM_COUNT_CELLS)) {
+    const key = normalizeProgram_(progRaw);
+    stats.getRange(addr).setValue(counts[key] || 0);
+  }
+
+  // Write total CE hours to B5
   stats.getRange('B5').setValue(totalHours);
 }

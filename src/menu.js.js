@@ -133,7 +133,7 @@ function runDiagnostics() {
 /** Menu: Update Reporting Stats (calls reporting_stats.js) */
 function updateReportingStatsMenu() {
   try {
-    updateProgramReportedTotals();  // must exist in reporting_stats.js
+    updateTotalReportedCEHours();  // must exist in reporting_stats.js
     toast_('Reporting Stats updated from Reported Hours.');
   } catch (e) {
     toast_('Failed to update Reporting Stats: ' + e.message, true);
